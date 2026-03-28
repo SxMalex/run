@@ -275,13 +275,10 @@ display = filtered[[
 
 display["startTimeLocal"] = pd.to_datetime(display["startTimeLocal"]).dt.strftime("%d/%m/%Y %H:%M")
 display["activityType"] = display["activityType"].map(type_labels).fillna(display["activityType"])
-display["distance_km"] = display["distance_km"].map("{:.2f}".format)
-display["duration_min"] = display["duration_min"].map("{:.0f}".format)
 
+# Conserver les colonnes numériques comme nombres (NaN = cellule vide, pas "—")
 for col in ["avgHR", "avgCadence", "calories", "elevationGain"]:
-    display[col] = display[col].apply(
-        lambda x: f"{int(x)}" if pd.notna(x) and x != 0 else "—"
-    )
+    display[col] = pd.to_numeric(display[col], errors="coerce")
 
 display = display.rename(columns={
     "startTimeLocal": "Date",
@@ -304,16 +301,16 @@ selected_event = st.dataframe(
     on_select="rerun",
     selection_mode="single-row",
     column_config={
-        "Date": st.column_config.TextColumn("📅 Date"),
-        "Nom": st.column_config.TextColumn("🏃 Nom"),
-        "Type": st.column_config.TextColumn("🏷️ Type"),
-        "Distance (km)": st.column_config.TextColumn("📏 Distance"),
-        "Durée (min)": st.column_config.TextColumn("⏱️ Durée"),
-        "Allure": st.column_config.TextColumn("🐇 Allure"),
-        "FC moy": st.column_config.TextColumn("❤️ FC moy"),
-        "Cadence": st.column_config.TextColumn("🦶 Cadence"),
-        "Calories": st.column_config.TextColumn("🔥 Calories"),
-        "D+ (m)": st.column_config.TextColumn("⛰️ D+"),
+        "Date":          st.column_config.TextColumn("📅 Date"),
+        "Nom":           st.column_config.TextColumn("🏃 Nom"),
+        "Type":          st.column_config.TextColumn("🏷️ Type"),
+        "Distance (km)": st.column_config.NumberColumn("📏 Distance (km)", format="%.2f"),
+        "Durée (min)":   st.column_config.NumberColumn("⏱️ Durée (min)",   format="%.0f"),
+        "Allure":        st.column_config.TextColumn("🐇 Allure"),
+        "FC moy":        st.column_config.NumberColumn("❤️ FC moy",        format="%d bpm"),
+        "Cadence":       st.column_config.NumberColumn("🦶 Cadence",        format="%d spm"),
+        "Calories":      st.column_config.NumberColumn("🔥 Calories",       format="%d kcal"),
+        "D+ (m)":        st.column_config.NumberColumn("⛰️ D+ (m)",         format="%d m"),
     },
 )
 
@@ -395,19 +392,31 @@ if selected_event and selected_event.selection and selected_event.selection.rows
 
             # Tableau des splits
             splits_display = splits_df[["lap", "distance_km", "duration_min", "pace", "avgHR", "avgCadence", "elevationGain"]].copy()
-            splits_display["avgHR"] = splits_display["avgHR"].apply(lambda x: f"{int(x)}" if pd.notna(x) else "—")
-            splits_display["avgCadence"] = splits_display["avgCadence"].apply(lambda x: f"{int(x)}" if pd.notna(x) else "—")
-            splits_display["elevationGain"] = splits_display["elevationGain"].apply(lambda x: f"{int(x)}" if pd.notna(x) else "—")
+            for col in ["avgHR", "avgCadence", "elevationGain"]:
+                splits_display[col] = pd.to_numeric(splits_display[col], errors="coerce")
             splits_display = splits_display.rename(columns={
                 "lap": "Km",
-                "distance_km": "Distance",
+                "distance_km": "Distance (km)",
                 "duration_min": "Durée (min)",
                 "pace": "Allure",
                 "avgHR": "FC moy",
                 "avgCadence": "Cadence",
-                "elevationGain": "D+",
+                "elevationGain": "D+ (m)",
             })
-            st.dataframe(splits_display, use_container_width=True, hide_index=True)
+            st.dataframe(
+                splits_display,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Km":           st.column_config.NumberColumn("Km",          format="%d"),
+                    "Distance (km)":st.column_config.NumberColumn("Distance (km)",format="%.2f"),
+                    "Durée (min)":  st.column_config.NumberColumn("Durée (min)", format="%.2f"),
+                    "Allure":       st.column_config.TextColumn("Allure"),
+                    "FC moy":       st.column_config.NumberColumn("FC moy",      format="%d bpm"),
+                    "Cadence":      st.column_config.NumberColumn("Cadence",      format="%d spm"),
+                    "D+ (m)":       st.column_config.NumberColumn("D+ (m)",       format="%d m"),
+                },
+            )
     elif details:
         st.info("Les données de splits ne sont pas disponibles pour cette activité.")
     else:

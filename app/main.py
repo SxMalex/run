@@ -386,29 +386,25 @@ if not running_df.empty:
 
     display_df = recent[list(display_cols.keys())].rename(columns=display_cols).copy()
     display_df["Date"] = pd.to_datetime(display_df["Date"]).dt.strftime("%d/%m/%Y %H:%M")
-    display_df["Distance (km)"] = display_df["Distance (km)"].map("{:.2f}".format)
-    display_df["Durée (min)"] = display_df["Durée (min)"].map("{:.0f}".format)
 
-    # Formatage des colonnes numériques optionnelles
+    # Conserver les colonnes numériques comme nombres (NaN = cellule vide)
     for col in ["FC moy (bpm)", "Cadence (spm)", "Calories", "D+ (m)"]:
-        display_df[col] = display_df[col].apply(
-            lambda x: f"{int(x)}" if pd.notna(x) and x != 0 else "—"
-        )
+        display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
 
     st.dataframe(
         display_df,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Date": st.column_config.TextColumn("📅 Date"),
-            "Activité": st.column_config.TextColumn("🏃 Activité"),
-            "Distance (km)": st.column_config.TextColumn("📏 Distance (km)"),
-            "Durée (min)": st.column_config.TextColumn("⏱️ Durée (min)"),
-            "Allure": st.column_config.TextColumn("🐇 Allure"),
-            "FC moy (bpm)": st.column_config.TextColumn("❤️ FC moy"),
-            "Cadence (spm)": st.column_config.TextColumn("🦶 Cadence"),
-            "Calories": st.column_config.TextColumn("🔥 Calories"),
-            "D+ (m)": st.column_config.TextColumn("⛰️ D+"),
+            "Date":           st.column_config.TextColumn("📅 Date"),
+            "Activité":       st.column_config.TextColumn("🏃 Activité"),
+            "Distance (km)":  st.column_config.NumberColumn("📏 Distance (km)", format="%.2f"),
+            "Durée (min)":    st.column_config.NumberColumn("⏱️ Durée (min)",   format="%.0f"),
+            "Allure":         st.column_config.TextColumn("🐇 Allure"),
+            "FC moy (bpm)":   st.column_config.NumberColumn("❤️ FC moy",        format="%d bpm"),
+            "Cadence (spm)":  st.column_config.NumberColumn("🦶 Cadence",        format="%d spm"),
+            "Calories":       st.column_config.NumberColumn("🔥 Calories",       format="%d kcal"),
+            "D+ (m)":         st.column_config.NumberColumn("⛰️ D+",             format="%d m"),
         },
     )
 else:
