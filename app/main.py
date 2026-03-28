@@ -304,6 +304,108 @@ if not running_df.empty:
                 )
         st.caption("Estimations basées sur la formule de Riegel (T2 = T1 × (D2/D1)^1.06) — à titre indicatif.")
 
+        # ── Évolution des prédictions dans le temps ────────────────────────
+        @st.cache_data(ttl=3600)
+        def _riegel_history(runs: pd.DataFrame, window_days: int = 60) -> pd.DataFrame:
+            """
+            Pour chaque semaine, calcule la meilleure prédiction Riegel sur les
+            `window_days` jours précédents. Renvoie un DataFrame avec une colonne
+            par distance cible (en secondes).
+            """
+            valid = runs[(runs["avgPace_sec"] > 0) & (runs["distance_km"] >= 1.0)].copy()
+            if len(valid) < 2:
+                return pd.DataFrame()
+
+            targets = [("5 km", 5.0), ("10 km", 10.0), ("Semi", 21.0975), ("Marathon", 42.195)]
+            valid = valid.sort_values("startTimeLocal")
+
+            first = valid["startTimeLocal"].min()
+            last  = pd.Timestamp(datetime.now())
+            weekly_ends = pd.date_range(first + timedelta(days=window_days), last, freq="W-MON")
+
+            rows = []
+            for week_end in weekly_ends:
+                window = valid[
+                    (valid["startTimeLocal"] > week_end - timedelta(days=window_days))
+                    & (valid["startTimeLocal"] <= week_end)
+                ]
+                if window.empty:
+                    continue
+                d1 = window["distance_km"].to_numpy()
+                t1 = window["avgPace_sec"].to_numpy() * d1
+                row = {"date": week_end}
+                for label, target_km in targets:
+                    t2 = t1 * (target_km / d1) ** 1.06
+                    row[label] = float(t2.min())   # secondes
+                rows.append(row)
+
+            return pd.DataFrame(rows)
+
+        window = st.slider(
+            "Fenêtre glissante (jours)", min_value=14, max_value=90, value=30, step=7,
+            key="riegel_window",
+        )
+        hist = _riegel_history(running_df, window_days=window)
+
+        if not hist.empty:
+            def _fmt_sec(s: float) -> str:
+                h, rem = divmod(int(s), 3600)
+                m, sec = divmod(rem, 60)
+                return f"{h}h{m:02d}'{sec:02d}\"" if h else f"{m}'{sec:02d}\""
+
+            colors = {
+                "5 km":     "#4ade80",
+                "10 km":    "#7c9cfc",
+                "Semi":     "#fb923c",
+                "Marathon": "#f87171",
+            }
+
+            fig_hist = go.Figure()
+            for label, color in colors.items():
+                if label not in hist.columns:
+                    continue
+                col_min = hist[label].min()
+                fig_hist.add_trace(go.Scatter(
+                    x=hist["date"],
+                    y=hist[label] / 60,          # minutes pour l'axe Y
+                    mode="lines",
+                    name=label,
+                    line=dict(color=color, width=2),
+                    customdata=hist[label].apply(_fmt_sec),
+                    hovertemplate=(
+                        f"<b>{label}</b> · %{{x|%b %Y}}<br>"
+                        "Meilleur estimé : <b>%{customdata}</b><extra></extra>"
+                    ),
+                ))
+                # Annotation sur le meilleur point
+                best_idx = hist[label].idxmin()
+                fig_hist.add_annotation(
+                    x=hist.loc[best_idx, "date"],
+                    y=col_min / 60,
+                    text=f"  ↓ {_fmt_sec(col_min)}",
+                    font=dict(color=color, size=10),
+                    showarrow=False,
+                    xanchor="left",
+                )
+
+            fig_hist.update_layout(
+                height=300,
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#ccc"),
+                xaxis=dict(gridcolor="rgba(255,255,255,0.05)", title="Date"),
+                yaxis=dict(
+                    gridcolor="rgba(255,255,255,0.05)",
+                    title="Temps estimé (min)",
+                    tickformat=".0f",
+                ),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                margin=dict(l=0, r=0, t=30, b=0),
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+            st.caption(f"Fenêtre glissante de {window} jours — ↓ = amélioration des performances.")
+
 st.divider()
 
 # ---------------------------------------------------------------------------
