@@ -418,8 +418,15 @@ with tab_fc:
 
         with col_right:
             st.markdown("#### Distribution des zones FC")
+            # Estimation depuis les données : max de tous les maxHR enregistrés
+            recorded_max = running_df["maxHR"].dropna()
+            estimated_max_hr = int(recorded_max.max()) if not recorded_max.empty else 190
+            estimated_max_hr = max(150, min(220, estimated_max_hr))
+
             max_hr_setting = st.number_input(
-                "FC max (bpm)", min_value=150, max_value=220, value=190, step=1
+                "FC max (bpm)", min_value=150, max_value=220,
+                value=estimated_max_hr, step=1,
+                help=f"Estimée à {estimated_max_hr} bpm d'après le pic enregistré sur vos activités Strava.",
             )
             hr_zones = client.get_hr_zones(running_filtered, max_hr=max_hr_setting)
 
