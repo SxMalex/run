@@ -95,8 +95,8 @@ client = get_strava_client()
 # ---------------------------------------------------------------------------
 # Onglets
 # ---------------------------------------------------------------------------
-tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite = st.tabs([
-    "📦 Volume", "🐇 Allure", "❤️ Fréquence cardiaque", "🦶 Cadence", "📅 Régularité"
+tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite, tab_charge = st.tabs([
+    "📦 Volume", "🐇 Allure", "❤️ Fréquence cardiaque", "🦶 Cadence", "📅 Régularité", "⚡ Charge"
 ])
 
 
@@ -785,3 +785,203 @@ with tab_regularite:
     c3.metric("Streak max", f"{streak_max} j")
     c4.metric("Streak actuel", f"{current_streak} j")
     c5.metric("Mois le + actif", best_month_name)
+
+
+# ============================================================
+# TAB 6 : Charge d'entraînement — CTL / ATL / TSB
+# ============================================================
+with tab_charge:
+    st.subheader("Charge d'entraînement — CTL / ATL / TSB")
+    st.caption(
+        "Modèle fitness/fatigue (PMC) · "
+        "**CTL** = forme chronique (42 j) · "
+        "**ATL** = fatigue aiguë (7 j) · "
+        "**TSB** = fraîcheur = CTL − ATL"
+    )
+
+    # ── Configuration de l'allure seuil ──────────────────────
+    # Auto-détection : 15e centile des sorties ≥ 8 km (approximation seuil lactique)
+    long_runs = running_df[
+        (running_df["distance_km"] >= 8) & (running_df["avgPace_sec"] > 0)
+    ]
+    auto_sec = int(long_runs["avgPace_sec"].quantile(0.15)) if not long_runs.empty else 330
+
+    # Initialiser la session state UNE SEULE FOIS depuis la valeur auto-détectée.
+    # Les reruns suivants utilisent la valeur du session_state, jamais auto_sec.
+    if "charge_threshold" not in st.session_state:
+        st.session_state["charge_threshold"] = auto_sec
+
+    col_slider, col_info = st.columns([2, 3])
+    with col_slider:
+        # On passe uniquement key= : Streamlit lit toujours st.session_state["charge_threshold"]
+        threshold_pace_sec = st.slider(
+            "Allure seuil (sec/km)",
+            min_value=180,   # 3:00/km
+            max_value=480,   # 8:00/km
+            step=5,
+            key="charge_threshold",
+        )
+        st.caption(
+            f"**{threshold_pace_sec // 60}:{threshold_pace_sec % 60:02d} /km** · "
+            f"1 h à cette allure = 100 TSS  "
+            f"(auto : {auto_sec // 60}:{auto_sec % 60:02d} /km)"
+        )
+    with col_info:
+        st.info(
+            "L'**allure seuil** (lactate threshold) est votre allure de course "
+            "soutenable sur ~1 heure — environ votre allure semi-marathon. "
+            "Elle calibre l'Intensity Factor : IF = allure_seuil / allure_moy."
+        )
+
+    # ── Calcul du TSS par activité (vectorisé) ────────────────
+    runs = running_df[running_df["avgPace_sec"] > 0].copy()
+    if runs.empty:
+        st.info("Pas de données de course disponibles.")
+    else:
+        runs["duration_h"] = runs["duration_min"] / 60
+        runs["IF"] = (threshold_pace_sec / runs["avgPace_sec"]).clip(upper=1.5)
+        runs["tss"] = (runs["duration_h"] * runs["IF"] ** 2 * 100).clip(upper=400)
+        runs["day"] = runs["startTimeLocal"].dt.normalize()
+
+        daily_tss = runs.groupby("day")["tss"].sum()
+
+        # Étendre sur la plage complète jusqu'à aujourd'hui
+        today_ts = pd.Timestamp(datetime.now().date())
+        full_range = pd.date_range(daily_tss.index.min(), today_ts, freq="D")
+        daily_full = pd.Series(0.0, index=full_range)
+        daily_full.update(daily_tss)
+
+        # ── Calcul CTL / ATL / TSB (EWMA exponentielle) ──────
+        k_ctl = np.exp(-1 / 42)
+        k_atl = np.exp(-1 / 7)
+        ctl_v = atl_v = 0.0
+        records = []
+        for d, tss in daily_full.items():
+            tsb_v = ctl_v - atl_v          # fraîcheur = fitness d'hier - fatigue d'hier
+            ctl_v = ctl_v * k_ctl + tss * (1 - k_ctl)
+            atl_v = atl_v * k_atl + tss * (1 - k_atl)
+            records.append({"date": d, "tss": tss, "ctl": ctl_v, "atl": atl_v, "tsb": tsb_v})
+
+        pmc = pd.DataFrame(records)
+
+        # Filtrer sur la période de la sidebar pour l'affichage
+        pmc_view = pmc[pmc["date"] >= pd.Timestamp(cutoff)].copy()
+
+        # ── Métriques actuelles ───────────────────────────────
+        last = pmc.iloc[-1]
+        tsb_now = last["tsb"]
+        if tsb_now > 25:
+            tsb_status, tsb_color = "Sous-entraîné", "off"
+        elif tsb_now >= 5:
+            tsb_status, tsb_color = "Forme optimale ✓", "normal"
+        elif tsb_now >= -20:
+            tsb_status, tsb_color = "Charge normale", "off"
+        else:
+            tsb_status, tsb_color = "Sur-entraîné ⚠️", "inverse"
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("CTL — Forme", f"{last['ctl']:.1f}",
+                  help="Charge chronique sur 42 jours (fitness)")
+        m2.metric("ATL — Fatigue", f"{last['atl']:.1f}",
+                  help="Charge aiguë sur 7 jours (fatigue)")
+        m3.metric("TSB — Fraîcheur", f"{tsb_now:.1f}",
+                  delta=tsb_status, delta_color=tsb_color)
+        m4.metric("TSS aujourd'hui", f"{last['tss']:.0f}",
+                  help="Training Stress Score du jour")
+
+        st.divider()
+
+        # ── Graphique PMC ─────────────────────────────────────
+        fig = go.Figure()
+
+        # Barres TSS journalier (axe secondaire, arrière-plan)
+        tss_bars = pmc_view[pmc_view["tss"] > 0]
+        fig.add_trace(go.Bar(
+            x=tss_bars["date"],
+            y=tss_bars["tss"],
+            name="TSS",
+            marker_color="rgba(124, 156, 252, 0.25)",
+            yaxis="y2",
+            hovertemplate="<b>%{x|%d/%m/%Y}</b><br>TSS : %{y:.0f}<extra></extra>",
+        ))
+
+        # Zone TSB verte (fraîcheur positive)
+        fig.add_trace(go.Scatter(
+            x=pmc_view["date"],
+            y=pmc_view["tsb"].clip(lower=0),
+            fill="tozeroy",
+            fillcolor="rgba(74, 222, 128, 0.12)",
+            line=dict(width=0),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+        # Zone TSB rouge (fatigue)
+        fig.add_trace(go.Scatter(
+            x=pmc_view["date"],
+            y=pmc_view["tsb"].clip(upper=0),
+            fill="tozeroy",
+            fillcolor="rgba(248, 113, 113, 0.12)",
+            line=dict(width=0),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
+        # CTL
+        fig.add_trace(go.Scatter(
+            x=pmc_view["date"], y=pmc_view["ctl"],
+            mode="lines", name="CTL — Forme",
+            line=dict(color="#7c9cfc", width=2.5),
+            hovertemplate="<b>%{x|%d/%m/%Y}</b><br>CTL : %{y:.1f}<extra></extra>",
+        ))
+        # ATL
+        fig.add_trace(go.Scatter(
+            x=pmc_view["date"], y=pmc_view["atl"],
+            mode="lines", name="ATL — Fatigue",
+            line=dict(color="#fb923c", width=2),
+            hovertemplate="<b>%{x|%d/%m/%Y}</b><br>ATL : %{y:.1f}<extra></extra>",
+        ))
+        # TSB
+        fig.add_trace(go.Scatter(
+            x=pmc_view["date"], y=pmc_view["tsb"],
+            mode="lines", name="TSB — Fraîcheur",
+            line=dict(color="#4ade80", width=2, dash="dot"),
+            hovertemplate="<b>%{x|%d/%m/%Y}</b><br>TSB : %{y:.1f}<extra></extra>",
+        ))
+
+        fig.add_hline(y=0, line_color="rgba(255,255,255,0.15)", line_dash="dot")
+
+        tss_max = pmc_view["tss"].max() if not pmc_view.empty else 100
+        fig.update_layout(
+            height=420,
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#ccc"),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
+            yaxis=dict(
+                gridcolor="rgba(255,255,255,0.05)",
+                title="CTL / ATL / TSB",
+                zeroline=True,
+                zerolinecolor="rgba(255,255,255,0.15)",
+            ),
+            yaxis2=dict(
+                title="TSS journalier",
+                overlaying="y",
+                side="right",
+                showgrid=False,
+                range=[0, max(tss_max * 4, 100)],
+                tickfont=dict(color="rgba(124,156,252,0.5)"),
+                titlefont=dict(color="rgba(124,156,252,0.5)"),
+            ),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            margin=dict(l=0, r=60, t=40, b=0),
+            hovermode="x unified",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # ── Zones d'interprétation ────────────────────────────
+        st.markdown("#### Interprétation du TSB")
+        iz1, iz2, iz3, iz4 = st.columns(4)
+        iz1.info("**TSB > 25**\nTrop frais\nSous-entraîné")
+        iz2.success("**TSB 5 → 25**\nForme optimale\nIdéal compétition")
+        iz3.warning("**TSB −20 → 5**\nCharge normale\nPhase d'entraînement")
+        iz4.error("**TSB < −20**\nSur-entraîné\nRécupération requise")
