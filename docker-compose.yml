@@ -1,0 +1,24 @@
+services:
+  app:
+    build: ./app
+    ports:
+      - "8501:8501"
+    env_file: .env
+    depends_on:
+      - ollama
+    volumes:
+      - ./app:/app
+      - app_cache:/app/.cache
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_data:
+  app_cache:
