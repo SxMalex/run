@@ -1,17 +1,18 @@
 # 🏃 Running Dashboard
 
 Tableau de bord personnel pour l'analyse de vos données de course à pied.
-Se connecte à **Strava** via son API officielle, affiche vos statistiques et vous offre des conseils
-personnalisés grâce à une **IA locale** (Ollama) — **100% gratuit, 100% local**.
+Se connecte à **Strava** via son API officielle, génère des **parcours inédits** via OpenRouteService,
+et offre des conseils personnalisés grâce à une **IA locale** (Ollama) — **100% gratuit, 100% local**.
 
 ---
 
 ## Fonctionnalités
 
-- **Accueil** — métriques clés semaine/mois, estimations de performance (5km, 10km, semi, marathon), volume hebdomadaire
+- **Accueil** — métriques clés semaine/mois, dernière activité détaillée (carte + splits), estimations de performance Riegel
 - **Activités** — liste filtrée par date, type et distance ; détail complet avec graphique des splits
-- **Statistiques** — volume hebdo/mensuel, évolution de l'allure, zones de FC, cadence
-- **IA Coach** — analyse personnalisée en streaming, questions libres à votre coach IA
+- **Statistiques** — 6 onglets : volume, allure, FC, cadence, régularité, charge d'entraînement (CTL/ATL/TSB)
+- **IA Coach** — analyse personnalisée en streaming, questions libres à votre coach IA local
+- **Prochaine sortie** — recommandation de séance basée sur la forme actuelle + parcours en boucle généré sur OpenStreetMap + export GPX pour Garmin
 
 ---
 
@@ -22,6 +23,7 @@ personnalisés grâce à une **IA locale** (Ollama) — **100% gratuit, 100% loc
 | [Docker](https://docs.docker.com/get-docker/) | 24.x | `docker --version` |
 | [Docker Compose](https://docs.docker.com/compose/install/) | v2.x | `docker compose version` |
 | Compte Strava | — | [strava.com](https://www.strava.com) |
+| Clé API OpenRouteService | — | [openrouteservice.org](https://openrouteservice.org/dev/#/signup) *(gratuit, optionnel)* |
 
 > **Note :** Ollama est inclus dans Docker Compose, aucune installation supplémentaire n'est nécessaire.
 
@@ -58,6 +60,12 @@ STRAVA_REDIRECT_URI=http://localhost:8501
 OLLAMA_HOST=http://ollama:11434
 OLLAMA_MODEL=llama3.2
 CACHE_TTL=3600
+
+# Optionnel — améliore le calcul des calories (défaut : 70 kg)
+ATHLETE_WEIGHT_KG=70
+
+# Optionnel — nécessaire uniquement pour la page Prochaine sortie
+ORS_API_KEY=votre_cle_ors
 ```
 
 > ⚠️ **Sécurité :** le fichier `.env` ne doit jamais être versionné (il est dans `.gitignore`).
@@ -96,10 +104,9 @@ Le modèle LLM doit être téléchargé une seule fois (environ 2 Go pour `llama
 
 ### 🏠 Accueil (`/`)
 
-- **6 métriques clés** : km cette semaine, km ce mois, nombre de sorties, allure moyenne, FC moyenne
-- **Estimations de performance** : temps prédits sur 5km, 10km, semi-marathon et marathon via la formule de Riegel
-- **Graphique de volume** : kilomètres par semaine sur les 12 dernières semaines avec ligne de tendance
-- **Tableau des 10 dernières sorties** avec toutes les métriques principales
+- **Métriques clés** : km cette semaine, km ce mois, nombre de sorties, allure moyenne, FC moyenne
+- **Estimations de performance** : temps prédits sur 5km, 10km, semi-marathon et marathon via la formule de Riegel, calculés sur vos meilleures sorties récentes
+- **Dernière activité** : carte du tracé GPS, splits kilomètre par kilomètre avec code couleur, 8 métriques clés
 
 ---
 
@@ -121,15 +128,19 @@ Liste complète de vos sorties avec des **filtres** :
 
 ### 📊 Statistiques (`/Stats`)
 
-Quatre onglets d'analyse :
+Six onglets d'analyse :
 
 **📦 Volume** — histogrammes hebdomadaires et mensuels, distribution des distances
 
-**🐇 Allure** — évolution temporelle, tendance, allure par tranche de distance
+**🐇 Allure** — évolution temporelle avec tendance, allure par tranche de distance
 
 **❤️ Fréquence cardiaque** — évolution FC, zones Z1-Z5, corrélation FC/allure
 
 **🦶 Cadence** — évolution avec zone optimale (170-180 spm), distribution
+
+**📅 Régularité** — calendrier heatmap des sorties, streaks, jours de repos
+
+**⚡ Charge d'entraînement** — CTL (forme chronique 42j), ATL (fatigue aiguë 7j), TSB (fraîcheur), graphique historique de la forme
 
 ---
 
@@ -140,6 +151,20 @@ Quatre onglets d'analyse :
 3. Choisissez le modèle LLM et le nombre de sorties analysées dans la barre latérale
 
 > 💡 **Confidentialité :** toutes les données restent sur votre machine. Aucune donnée n'est envoyée à un service externe.
+
+---
+
+### 🗺️ Prochaine sortie (`/Next_Session`)
+
+Génère une recommandation de séance et un parcours inédit basés sur votre forme actuelle :
+
+1. **Recommandation automatique** : calcul CTL/ATL/TSB → sélection du type de séance (récupération, endurance, tempo ou sortie longue)
+2. **Objectifs** : distance cible, allure cible avec fourchette ±4%, dénivelé, durée estimée
+3. **Parcours en boucle** : généré via OpenRouteService autour d'un de vos points de départ habituels
+4. **Carte interactive** et **profil altimétrique**
+5. **Export GPX** compatible Garmin Connect
+
+> Nécessite une clé API OpenRouteService (gratuite, inscription sur [openrouteservice.org](https://openrouteservice.org/dev/#/signup)).
 
 ---
 
@@ -185,6 +210,8 @@ docker compose exec ollama ollama list
 | `OLLAMA_HOST` | `http://ollama:11434` | URL du serveur Ollama |
 | `OLLAMA_MODEL` | `llama3.2` | Modèle LLM à utiliser |
 | `CACHE_TTL` | `3600` | Durée du cache en secondes |
+| `ATHLETE_WEIGHT_KG` | `70` | Poids de l'athlète pour le calcul des calories |
+| `ORS_API_KEY` | — | Clé API OpenRouteService (page Prochaine sortie) |
 
 ### Modèles Ollama recommandés
 
@@ -219,21 +246,44 @@ ollama:
 run/
 ├── docker-compose.yml          # Orchestration Docker
 ├── .env.example                # Template de configuration
+├── pytest.ini                  # Configuration des tests (pythonpath = app)
 ├── README.md                   # Ce fichier
 ├── scripts/
 │   ├── strava_auth.py          # Authentification OAuth (alternative CLI)
 │   └── pull_model.sh           # Téléchargement du modèle Ollama
+├── tests/
+│   ├── conftest.py             # Fixtures et stubs partagés
+│   ├── test_strava_client.py   # Tests des fonctions utilitaires Strava
+│   └── test_next_session.py    # Tests de la logique de recommandation
 └── app/
     ├── Dockerfile              # Image Docker de l'application
     ├── requirements.txt        # Dépendances Python
     ├── main.py                 # Page d'accueil Streamlit
-    ├── strava_client.py        # Client API Strava + cache
+    ├── strava_client.py        # Client API Strava + cache + transformations
     ├── llm_client.py           # Client Ollama (IA Coach)
+    ├── next_session_logic.py   # Logique métier pure : TSB, recommandation, GPX
     └── pages/
         ├── 1_Activities.py     # Liste et détails des activités
-        ├── 2_Stats.py          # Graphiques statistiques
-        └── 3_AI_Coach.py       # Coach IA avec streaming
+        ├── 2_Stats.py          # Graphiques statistiques (6 onglets)
+        ├── 3_AI_Coach.py       # Coach IA avec streaming
+        └── 4_Next_Session.py   # Prochaine sortie + parcours ORS
 ```
+
+---
+
+## Tests
+
+```bash
+# Lancer la suite de tests (94 tests)
+pytest
+
+# Avec couverture de code
+pytest --cov=app --cov-report=term-missing
+```
+
+Les tests couvrent les fonctions pures sans dépendance à Streamlit :
+- `strava_client.py` — utilitaires (allure, calories, cadence, normalisation) et méthodes DataFrame
+- `next_session_logic.py` — calcul TSB, recommandation de séance, parsing ORS, génération GPX (**99% de couverture**)
 
 ---
 
@@ -261,20 +311,24 @@ docker compose exec ollama ollama list
 - Cliquez sur "🔄 Actualiser les données" dans la barre latérale
 - Vérifiez que vous avez des activités sur Strava
 
+**La page Prochaine sortie ne génère pas de parcours**
+- Vérifiez que `ORS_API_KEY` est définie dans `.env` ou saisie dans la barre latérale
+- Le profil utilisé est `foot-walking` (compatible running)
+
 ---
 
 ## Architecture et fonctionnement
 
 ### Vue d'ensemble
 
-Le projet est une application **mono-utilisateur 100% locale** : aucune donnée ne quitte ta machine. Deux services tournent en parallèle via Docker Compose.
+Le projet est une application **mono-utilisateur 100% locale** : aucune donnée ne quitte votre machine (hormis les appels API Strava et ORS). Deux services tournent en parallèle via Docker Compose.
 
 ```
 Navigateur
     │
     ▼
 [Streamlit :8501]  ←→  [API Strava]
-    │
+    │                  [API ORS]
     ▼
 [Ollama :11434]  (LLM local)
 ```
@@ -285,25 +339,27 @@ Navigateur
 
 **Interface — Streamlit**
 
-Streamlit est un framework Python qui transforme du code Python en application web sans écrire de HTML/JS. Chaque fois qu'un utilisateur interagit (clique, slider...), tout le script se réexécute de haut en bas. C'est son modèle d'exécution fondamental.
-
-Le projet l'utilise en **multi-pages** : chaque fichier dans `pages/` devient automatiquement un onglet dans la navigation.
+Streamlit transforme du code Python en application web sans HTML/JS. Chaque interaction déclenche une réexécution complète du script (modèle stateless). Le projet l'utilise en **multi-pages** : chaque fichier dans `pages/` devient automatiquement un onglet de navigation.
 
 **Données — Pandas + Plotly**
 
-- **Pandas** gère toutes les données sous forme de `DataFrame`. Toutes les agrégations (stats semaine/mois, filtres, zones FC) se font via ses opérateurs vectorisés.
+- **Pandas** gère toutes les données sous forme de `DataFrame`. Toutes les agrégations (stats semaine/mois, filtres, zones FC, CTL/ATL/TSB) se font via ses opérateurs vectorisés.
 - **Plotly** génère les graphiques interactifs (zoom, hover) directement depuis les DataFrames.
 
 **API — Strava OAuth 2.0**
 
 L'accès aux données passe par l'API REST officielle Strava avec le flux OAuth 2.0 :
-- **Access token** : valide 6h, utilisé dans chaque requête HTTP (`Authorization: Bearer ...`)
-- **Refresh token** : permanent, permet de regénérer un access token sans intervention de l'utilisateur
-- Les tokens sont stockés dans un fichier JSON sur le volume Docker
+- **Access token** : valide 6h, utilisé dans chaque requête HTTP
+- **Refresh token** : permanent, permet de regénérer un access token automatiquement
+- Les tokens sont stockés dans un fichier JSON sur le volume Docker (`/app/.cache/strava_token.json`)
+
+**Parcours — OpenRouteService**
+
+L'API ORS génère des boucles de course en `foot-walking` autour d'un point GPS de départ, avec dénivelé réel via MNT. Chaque variante est reproductible via un paramètre `seed`.
 
 **IA — Ollama**
 
-Ollama est un serveur local qui fait tourner des LLMs (llama3.2, mistral...). Le projet lui envoie des requêtes HTTP en **streaming** : les tokens arrivent un par un et Streamlit les affiche au fil de l'eau, ce qui donne l'effet "l'IA écrit en direct".
+Ollama est un serveur local qui fait tourner des LLMs (llama3.2, mistral...). Le projet lui envoie des requêtes HTTP en **streaming** : les tokens arrivent un par un et Streamlit les affiche au fil de l'eau.
 
 **Infrastructure — Docker Compose**
 
@@ -316,8 +372,6 @@ Deux conteneurs orchestrés :
 ### Patterns utilisés
 
 **Cache à deux niveaux**
-
-C'est le pattern central du projet, pour éviter de frapper l'API Strava à chaque rechargement de page :
 
 ```
 Requête données
@@ -335,42 +389,23 @@ API Strava (réseau)
 _cache_set() → disque → retour → RAM Streamlit
 ```
 
-Le cache disque survit aux redémarrages de l'app. Le cache RAM évite de relire le disque à chaque interaction.
-
-**Singleton de client**
-
-`@st.cache_resource` garantit qu'une seule instance de `StravaClient` existe par session Streamlit. Chaque page qui en a besoin appelle `get_strava_client()` — elles partagent toutes la même instance et le même token chargé.
-
 **Séparation des responsabilités**
 
-Trois couches distinctes qui ne se mélangent pas :
-
-| Couche | Fichier | Rôle |
+| Couche | Fichier(s) | Rôle |
 |---|---|---|
 | Données | `strava_client.py` | Fetch API, cache, transformation en DataFrame |
+| Logique métier | `next_session_logic.py` | Calculs purs, testables sans Streamlit |
 | IA | `llm_client.py` | Appels Ollama, streaming, formatage du contexte |
 | UI | `main.py` + `pages/` | Affichage uniquement, aucune logique métier |
 
-**Token refresh transparent**
+**Calcul de la charge d'entraînement (CTL/ATL/TSB)**
 
-`StravaClient.connect()` vérifie l'expiration du token avant chaque session. Si expiré, il appelle `_refresh_token()` automatiquement et réécrit le fichier — l'utilisateur ne voit jamais rien.
-
----
-
-### Flux de données complet (exemple page d'accueil)
-
+Le TSS (Training Stress Score) de chaque sortie est calculé ainsi :
 ```
-1. Streamlit exécute main.py
-2. Vérifie st.query_params → pas de ?code= (déjà authentifié)
-3. Vérifie TOKEN_FILE → existe → on continue
-4. load_activities(100) → hit cache RAM → DataFrame
-5. get_summary_metrics(df) → calculs Pandas purs (pas d'API)
-6. _predict_race_times(df) → formule de Riegel sur le DataFrame
-7. get_weekly_stats(df) → groupby Pandas par semaine
-8. Plotly construit le graphique → Streamlit l'affiche
+IF = allure_seuil / allure_moyenne   (clampé à 1.5)
+TSS = durée_heures × IF² × 100
 ```
-
-Après la première charge, **tout est local** — aucun appel réseau jusqu'à expiration du cache (1h par défaut).
+CTL et ATL sont des moyennes exponentielles (EWMA) avec des constantes de temps de 42 et 7 jours respectivement. TSB = CTL − ATL.
 
 ---
 
@@ -380,4 +415,5 @@ Projet personnel à usage privé. Utilise des bibliothèques open-source :
 [Strava API](https://developers.strava.com),
 [Streamlit](https://streamlit.io),
 [Ollama](https://ollama.ai),
+[OpenRouteService](https://openrouteservice.org),
 [Plotly](https://plotly.com).
