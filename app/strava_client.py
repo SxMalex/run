@@ -253,6 +253,7 @@ class StravaClient:
                 "calories": act.get("calories"),
                 "elevationGain": act.get("total_elevation_gain"),
                 "avgSpeed_ms": avg_speed_ms,
+                "kudosCount": act.get("kudos_count", 0) or 0,
             })
 
         _cache_set(cache_key, rows)

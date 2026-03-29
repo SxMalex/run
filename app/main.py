@@ -231,7 +231,9 @@ client = get_strava_client()
 metrics = client.get_summary_metrics(df)
 running_df = df[df["activityType"] == "running"]
 
-col1, col2, col3, col4, col5, col6 = st.columns(6)
+col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+
+total_kudos = int(df["kudosCount"].sum()) if "kudosCount" in df.columns else 0
 
 metric_data = [
     (col1, metrics["km_semaine"], "km", "Cette semaine", "🗓️"),
@@ -240,6 +242,7 @@ metric_data = [
     (col4, metrics["nb_sorties_mois"], "", "Sorties / mois", "📊"),
     (col5, metrics["pace_moyen"], "", "Allure moyenne", "⏱️"),
     (col6, metrics["hr_moyen"], "", "FC moyenne", "❤️"),
+    (col7, total_kudos, "", "Kudos reçus", "👍"),
 ]
 
 for col, value, unit, label, icon in metric_data:
