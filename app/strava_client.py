@@ -61,6 +61,14 @@ def _cache_set(key: str, data: object) -> None:
         logger.warning("Impossible d'écrire le cache : %s", e)
 
 
+def _write_token(token_data: dict) -> None:
+    """Écrit les tokens Strava sur disque avec permissions restrictives (600)."""
+    def _opener(path, flags):
+        return os.open(path, flags, 0o600)
+    with open(TOKEN_FILE, "w", encoding="utf-8", opener=_opener) as f:
+        json.dump(token_data, f)
+
+
 # ---------------------------------------------------------------------------
 # Helpers OAuth (utilisés par l'UI Streamlit)
 # ---------------------------------------------------------------------------
@@ -95,8 +103,7 @@ def exchange_code(client_id: str, client_secret: str, code: str) -> dict:
     resp.raise_for_status()
     token_data = resp.json()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(TOKEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(token_data, f)
+    _write_token(token_data)
     return token_data
 
 
@@ -167,8 +174,7 @@ class StravaClient:
         )
         resp.raise_for_status()
         token_data = resp.json()
-        with open(TOKEN_FILE, "w", encoding="utf-8") as f:
-            json.dump(token_data, f)
+        _write_token(token_data)
         return token_data
 
     def _ensure_connected(self) -> None:
@@ -479,7 +485,7 @@ class StravaClient:
         Récupère les best_efforts Strava (meilleurs temps sur distances standard)
         depuis les détails des activités fournies.
         Retourne un dict {nom_distance: {elapsed_time, date, activity_name}}.
-        Seuls les efforts avec pr_rank == 1 (record personnel) sont conservés.
+        Conserve le meilleur temps toutes activités confondues.
         """
         cache_key = f"strava_best_efforts_{self.client_id}_{'_'.join(str(i) for i in sorted(activity_ids))}"
         cached = _cache_get(cache_key)
@@ -501,7 +507,6 @@ class StravaClient:
 
             for effort in details.get("best_efforts", []):
                 name = effort.get("name", "")
-                pr_rank = effort.get("pr_rank")
                 elapsed = effort.get("elapsed_time")
                 if not elapsed or not name:
                     continue

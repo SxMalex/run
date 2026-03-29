@@ -11,11 +11,30 @@ from plotly.subplots import make_subplots
 import numpy as np
 from datetime import datetime, timedelta
 
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from strava_client import StravaClient, _seconds_to_pace_str
+
+
+def _add_trend_line(fig: go.Figure, x, y, ascending_better: bool = False) -> tuple[go.Figure, float | None]:
+    """
+    Ajoute une ligne de tendance (régression linéaire) à un graphique Plotly.
+    Retourne (fig, pente) — pente=None si moins de 5 points.
+    ascending_better=True → vert si pente > 0 (cadence) ; False → vert si pente < 0 (allure, FC).
+    """
+    if len(y) < 5:
+        return fig, None
+    x_num = np.arange(len(y))
+    z = np.polyfit(x_num, y, 1)
+    slope = z[0]
+    color = "rgba(74, 222, 128, 0.8)" if (slope > 0) == ascending_better else "rgba(248, 113, 113, 0.7)"
+    fig.add_trace(go.Scatter(
+        x=x,
+        y=np.poly1d(z)(x_num),
+        mode="lines",
+        name="Tendance",
+        line=dict(color=color, width=2, dash="dot"),
+    ))
+    return fig, slope
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -261,19 +280,9 @@ with tab_allure:
         ))
 
         # Tendance linéaire
-        if len(pace_data) >= 5:
-            x_num = np.arange(len(pace_data))
-            z = np.polyfit(x_num, pace_data["pace_min"], 1)
-            p = np.poly1d(z)
-            trend = p(x_num)
-            color_trend = "rgba(74, 222, 128, 0.8)" if z[0] < 0 else "rgba(248, 113, 113, 0.8)"
-            fig_pace.add_trace(go.Scatter(
-                x=pace_data["startTimeLocal"],
-                y=trend,
-                mode="lines",
-                name="Tendance",
-                line=dict(color=color_trend, width=2, dash="dot"),
-            ))
+        fig_pace, pace_slope = _add_trend_line(
+            fig_pace, pace_data["startTimeLocal"], pace_data["pace_min"], ascending_better=False
+        )
 
         # Axe Y inversé (allure plus basse = plus rapide)
         y_min = pace_data["pace_min"].min()
@@ -305,8 +314,7 @@ with tab_allure:
         c1.metric("Meilleure allure", _seconds_to_pace_str(pace_data["avgPace_sec"].min()))
         c2.metric("Allure moyenne", _seconds_to_pace_str(pace_data["avgPace_sec"].mean()))
         c3.metric("Allure médiane", _seconds_to_pace_str(float(pace_data["avgPace_sec"].median())))
-        trend_txt = "Amélioration 📈" if z[0] < 0 else "Ralentissement 📉"
-        c4.metric("Tendance", trend_txt if len(pace_data) >= 5 else "N/A")
+        c4.metric("Tendance", ("Amélioration 📈" if pace_slope < 0 else "Ralentissement 📉") if pace_slope is not None else "N/A")
 
         # Allure par distance
         st.markdown("#### Allure moyenne par tranche de distance")
@@ -391,18 +399,9 @@ with tab_fc:
                 ))
 
             # Tendance FC
-            if len(hr_data) >= 5:
-                x_num = np.arange(len(hr_data))
-                z_hr = np.polyfit(x_num, hr_data["avgHR"], 1)
-                p_hr = np.poly1d(z_hr)
-                color_hr = "rgba(74, 222, 128, 0.8)" if z_hr[0] < 0 else "rgba(248, 113, 113, 0.6)"
-                fig_hr.add_trace(go.Scatter(
-                    x=hr_data["startTimeLocal"],
-                    y=p_hr(x_num),
-                    mode="lines",
-                    name="Tendance",
-                    line=dict(color=color_hr, width=2, dash="dot"),
-                ))
+            fig_hr, _ = _add_trend_line(
+                fig_hr, hr_data["startTimeLocal"], hr_data["avgHR"], ascending_better=False
+            )
 
             fig_hr.update_layout(
                 height=350,
@@ -466,7 +465,11 @@ with tab_fc:
         c1.metric("FC moy globale", f"{hr_data['avgHR'].mean():.0f} bpm")
         c2.metric("FC moy minimale", f"{hr_data['avgHR'].min():.0f} bpm")
         c3.metric("FC moy maximale", f"{hr_data['avgHR'].max():.0f} bpm")
-        hr_trend_txt = "Baisse 📈" if len(hr_data) >= 5 and z_hr[0] < 0 else ("Hausse 📉" if len(hr_data) >= 5 else "N/A")
+        if len(hr_data) >= 5:
+            z_hr = np.polyfit(range(len(hr_data)), hr_data["avgHR"], 1)
+            hr_trend_txt = "Baisse 📈" if z_hr[0] < 0 else "Hausse 📉"
+        else:
+            hr_trend_txt = "N/A"
         c4.metric("Tendance FC", hr_trend_txt)
 
         # FC vs Allure (corrélation)
@@ -553,18 +556,9 @@ with tab_cadence:
         ))
 
         # Tendance
-        if len(cad_data) >= 5:
-            x_num = np.arange(len(cad_data))
-            z_cad = np.polyfit(x_num, cad_data["avgCadence"], 1)
-            p_cad = np.poly1d(z_cad)
-            color_cad = "rgba(74, 222, 128, 0.8)" if z_cad[0] > 0 else "rgba(251, 146, 60, 0.8)"
-            fig_cad.add_trace(go.Scatter(
-                x=cad_data["startTimeLocal"],
-                y=p_cad(x_num),
-                mode="lines",
-                name="Tendance",
-                line=dict(color=color_cad, width=2, dash="dot"),
-            ))
+        fig_cad, _ = _add_trend_line(
+            fig_cad, cad_data["startTimeLocal"], cad_data["avgCadence"], ascending_better=True
+        )
 
         fig_cad.update_layout(
             height=380,
@@ -589,7 +583,11 @@ with tab_cadence:
         )
         c3.metric("Dans la zone optimale", f"{pct_optimal:.0f}%")
 
-        cad_trend_txt = "Amélioration 📈" if len(cad_data) >= 5 and z_cad[0] > 0 else ("Baisse 📉" if len(cad_data) >= 5 else "N/A")
+        if len(cad_data) >= 5:
+            z_cad = np.polyfit(range(len(cad_data)), cad_data["avgCadence"], 1)
+            cad_trend_txt = "Amélioration 📈" if z_cad[0] > 0 else "Baisse 📉"
+        else:
+            cad_trend_txt = "N/A"
         c4.metric("Tendance", cad_trend_txt)
 
         st.info(

@@ -9,10 +9,6 @@ import plotly.express as px
 from datetime import datetime, timedelta, date
 import polyline as polyline_lib
 
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from strava_client import StravaClient
 
 # ---------------------------------------------------------------------------
@@ -358,12 +354,13 @@ if selected_event and selected_event.selection and selected_event.selection.rows
             # Graphique des splits
             fig_splits = go.Figure()
 
+            avg_split_pace = splits_df.loc[splits_df["pace_sec"] > 0, "pace_sec"].mean()
             fig_splits.add_trace(go.Bar(
                 x=splits_df["lap"].astype(str),
                 y=splits_df["pace_sec"].apply(lambda s: s / 60 if s > 0 else None),
                 name="Allure (min/km)",
                 marker_color=[
-                    "rgba(74, 222, 128, 0.8)" if p > 0 and p < splits_df.loc[splits_df["pace_sec"] > 0, "pace_sec"].mean()
+                    "rgba(74, 222, 128, 0.8)" if p > 0 and p < avg_split_pace
                     else "rgba(124, 156, 252, 0.8)"
                     for p in splits_df["pace_sec"]
                 ],

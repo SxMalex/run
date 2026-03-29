@@ -15,8 +15,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copier le code de l'application
 COPY . .
 
-# Créer le répertoire de cache
-RUN mkdir -p /app/.cache
+# Créer le répertoire de cache et un utilisateur non-root
+RUN mkdir -p /app/.cache && \
+    useradd -m appuser && \
+    chown -R appuser /app
+
+USER appuser
 
 # Exposer le port Streamlit
 EXPOSE 8501

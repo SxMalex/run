@@ -3,13 +3,10 @@ Page IA Coach — Analyse personnalisée de l'entraînement via Ollama.
 Affiche un résumé des activités et génère des conseils en streaming.
 """
 
+import os
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from strava_client import StravaClient, _seconds_to_pace_str
 from llm_client import OllamaClient
@@ -83,10 +80,14 @@ def load_activities(limit: int = 50) -> tuple[pd.DataFrame, str | None]:
 # ---------------------------------------------------------------------------
 # Session state pour l'historique du chat
 # ---------------------------------------------------------------------------
+MAX_CHAT_HISTORY = 20
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "activities_summary" not in st.session_state:
     st.session_state.activities_summary = None
+if "_summary_n" not in st.session_state:
+    st.session_state["_summary_n"] = None
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +185,14 @@ if df.empty:
 
 
 # ---------------------------------------------------------------------------
-# Préparation du résumé des activités
+# Préparation du résumé des activités (mis en cache par session)
 # ---------------------------------------------------------------------------
-activities_summary = OllamaClient.format_activities_summary(df, n=nb_activites_coach)
-st.session_state.activities_summary = activities_summary
+if st.session_state["_summary_n"] != nb_activites_coach or st.session_state.activities_summary is None:
+    activities_summary = OllamaClient.format_activities_summary(df, n=nb_activites_coach)
+    st.session_state.activities_summary = activities_summary
+    st.session_state["_summary_n"] = nb_activites_coach
+else:
+    activities_summary = st.session_state.activities_summary
 
 # Afficher le résumé dans un expandeur
 with st.expander("📋 Données envoyées à l'IA (contexte)", expanded=False):
@@ -254,13 +259,14 @@ if analyze_clicked:
 
             response_placeholder.markdown(full_response)
 
-            # Sauvegarder dans l'historique
+            # Sauvegarder dans l'historique (limité à MAX_CHAT_HISTORY messages)
             st.session_state.chat_history.append({
                 "role": "assistant",
                 "content": full_response,
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
                 "type": "analysis",
             })
+            st.session_state.chat_history = st.session_state.chat_history[-MAX_CHAT_HISTORY:]
 
         except ConnectionError as e:
             st.error(f"Connexion impossible à Ollama : {e}")
@@ -347,6 +353,7 @@ if active_question:
                 "timestamp": datetime.now().strftime("%H:%M:%S"),
                 "type": "answer",
             })
+            st.session_state.chat_history = st.session_state.chat_history[-MAX_CHAT_HISTORY:]
 
         except ConnectionError as e:
             st.error(f"Connexion impossible à Ollama : {e}")

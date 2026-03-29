@@ -4,6 +4,7 @@ Affiche les métriques clés de la semaine/mois et les dernières activités.
 """
 
 import os
+import numpy as np
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -68,8 +69,8 @@ if "code" in _params:
                 st.query_params.clear()
                 st.cache_resource.clear()
                 st.rerun()
-            except Exception as _e:
-                st.error(f"Erreur lors de l'échange du code : {_e}")
+            except Exception as e:
+                st.error(f"Erreur lors de l'échange du code : {e}")
                 st.query_params.clear()
 
 # Étape 1 (suite) : toujours pas de token → page de connexion
@@ -259,7 +260,6 @@ st.subheader("🏆 Meilleures performances estimées")
 
 @st.cache_data(ttl=3600)
 def _riegel_estimates(runs: pd.DataFrame) -> list[dict]:
-    import numpy as np
     valid = runs[(runs["avgPace_sec"] > 0) & (runs["distance_km"] >= 1.0)]
     if valid.empty:
         return []
