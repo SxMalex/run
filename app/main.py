@@ -7,6 +7,7 @@ import os
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import polyline as polyline_lib
 from datetime import datetime, timedelta
 
 from strava_client import StravaClient, TOKEN_FILE, get_auth_url, exchange_code
@@ -413,47 +414,97 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Tableau des dernières activités
 # ---------------------------------------------------------------------------
-st.subheader("🏅 Dernières activités")
+st.subheader("🏅 Dernière activité")
+
+
+@st.cache_data(ttl=3600, show_spinner="Chargement des détails...")
+def load_last_activity_details(activity_id: int) -> dict:
+    return get_strava_client().get_activity_details(activity_id)
+
+
+def _render_last_activity_map(details_data: dict) -> None:
+    map_data = details_data.get("details", {}).get("map", {})
+    encoded = map_data.get("polyline") or map_data.get("summary_polyline")
+    if not encoded:
+        return
+    coords = polyline_lib.decode(encoded)
+    if not coords:
+        return
+    lats = [c[0] for c in coords]
+    lons = [c[1] for c in coords]
+    center_lat = (min(lats) + max(lats)) / 2
+    center_lon = (min(lons) + max(lons)) / 2
+    max_range = max(max(lats) - min(lats), max(lons) - min(lons))
+    zoom = 15 if max_range < 0.01 else 13 if max_range < 0.05 else 12 if max_range < 0.15 else 11 if max_range < 0.4 else 10
+
+    fig = go.Figure()
+    fig.add_trace(go.Scattermapbox(
+        lat=lats, lon=lons, mode="lines",
+        line=dict(width=4, color="#fc4c02"), hoverinfo="none",
+    ))
+    fig.add_trace(go.Scattermapbox(
+        lat=[lats[0], lats[-1]], lon=[lons[0], lons[-1]],
+        mode="markers", marker=dict(size=14, color=["#22c55e", "#ef4444"]),
+        text=["Départ", "Arrivée"], hoverinfo="text",
+    ))
+    fig.update_layout(
+        mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=zoom),
+        height=380, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
 
 if not running_df.empty:
-    recent = running_df.sort_values("startTimeLocal", ascending=False).head(10).copy()
+    last = running_df.sort_values("startTimeLocal", ascending=False).iloc[0]
+    date_fmt = pd.to_datetime(last["startTimeLocal"]).strftime("%A %d %B %Y à %H:%M")
 
-    # Formatage pour l'affichage
-    display_cols = {
-        "startTimeLocal": "Date",
-        "activityName": "Activité",
-        "distance_km": "Distance (km)",
-        "duration_min": "Durée (min)",
-        "avgPace": "Allure",
-        "avgHR": "FC moy (bpm)",
-        "avgCadence": "Cadence (spm)",
-        "calories": "Calories",
-        "elevationGain": "D+ (m)",
-    }
+    st.markdown(f"#### {last['activityName']}")
+    st.caption(f"📅 {date_fmt}")
 
-    display_df = recent[list(display_cols.keys())].rename(columns=display_cols).copy()
-    display_df["Date"] = pd.to_datetime(display_df["Date"]).dt.strftime("%d/%m/%Y %H:%M")
+    m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
+    m1.metric("📏 Distance",  f"{last['distance_km']:.2f} km")
+    m2.metric("⏱️ Durée",     f"{int(last['duration_min'])} min")
+    m3.metric("🐇 Allure",    last["avgPace"])
+    m4.metric("❤️ FC moy",    f"{int(last['avgHR'])} bpm"       if pd.notna(last.get("avgHR"))       else "—")
+    m5.metric("❤️‍🔥 FC max",   f"{int(last['maxHR'])} bpm"       if pd.notna(last.get("maxHR"))       else "—")
+    m6.metric("🦶 Cadence",   f"{int(last['avgCadence'])} spm"  if pd.notna(last.get("avgCadence"))  else "—")
+    m7.metric("🔥 Calories",  f"{int(last['calories'])} kcal"   if pd.notna(last.get("calories"))    else "—")
+    m8.metric("⛰️ D+",        f"{int(last['elevationGain'])} m" if pd.notna(last.get("elevationGain")) else "—")
 
-    # Conserver les colonnes numériques comme nombres (NaN = cellule vide)
-    for col in ["FC moy (bpm)", "Cadence (spm)", "Calories", "D+ (m)"]:
-        display_df[col] = pd.to_numeric(display_df[col], errors="coerce")
+    with st.spinner("Chargement de la carte et des splits..."):
+        details = load_last_activity_details(int(last["activityId"]))
 
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Date":           st.column_config.TextColumn("📅 Date"),
-            "Activité":       st.column_config.TextColumn("🏃 Activité"),
-            "Distance (km)":  st.column_config.NumberColumn("📏 Distance (km)", format="%.2f"),
-            "Durée (min)":    st.column_config.NumberColumn("⏱️ Durée (min)",   format="%.0f"),
-            "Allure":         st.column_config.TextColumn("🐇 Allure"),
-            "FC moy (bpm)":   st.column_config.NumberColumn("❤️ FC moy",        format="%d bpm"),
-            "Cadence (spm)":  st.column_config.NumberColumn("🦶 Cadence",        format="%d spm"),
-            "Calories":       st.column_config.NumberColumn("🔥 Calories",       format="%d kcal"),
-            "D+ (m)":         st.column_config.NumberColumn("⛰️ D+",             format="%d m"),
-        },
-    )
+    if details:
+        col_map, col_splits = st.columns([3, 2])
+
+        with col_map:
+            _render_last_activity_map(details)
+
+        with col_splits:
+            splits = details.get("splits", [])
+            if splits:
+                splits_df = pd.DataFrame(splits)
+                avg_pace = splits_df.loc[splits_df["pace_sec"] > 0, "pace_sec"].mean()
+                fig_s = go.Figure()
+                fig_s.add_trace(go.Bar(
+                    x=splits_df["lap"].astype(str),
+                    y=splits_df["pace_sec"].apply(lambda s: s / 60 if s > 0 else None),
+                    marker_color=[
+                        "rgba(74,222,128,0.85)" if (p > 0 and p < avg_pace) else "rgba(124,156,252,0.85)"
+                        for p in splits_df["pace_sec"]
+                    ],
+                    hovertemplate="<b>Km %{x}</b><br>%{customdata}<extra></extra>",
+                    customdata=splits_df["pace"],
+                ))
+                fig_s.update_layout(
+                    height=380,
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#ccc"),
+                    xaxis=dict(title="Km", gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(title="Allure (min/km)", gridcolor="rgba(255,255,255,0.05)", tickformat=".1f"),
+                    margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
+                )
+                st.plotly_chart(fig_s, use_container_width=True)
 else:
     st.info("Aucune activité de course trouvée dans les données chargées.")
 
