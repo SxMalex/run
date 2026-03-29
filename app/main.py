@@ -252,162 +252,41 @@ for col, value, unit, label, icon in metric_data:
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Prédictions de performance — Formule de Riegel
+# Estimations de performance — Formule de Riegel
 # ---------------------------------------------------------------------------
 st.subheader("🏆 Meilleures performances estimées")
 
+
 @st.cache_data(ttl=3600)
-def _predict_race_times(runs: pd.DataFrame) -> list[dict]:
-    """
-    Estime les temps sur 5km, 10km, semi et marathon via la formule de Riegel :
-    T2 = T1 × (D2 / D1) ^ 1.06
-    Pour chaque distance cible, on prend la projection la plus optimiste
-    parmi toutes les sorties disponibles (vectorisé avec NumPy).
-    """
+def _riegel_estimates(runs: pd.DataFrame) -> list[dict]:
+    import numpy as np
     valid = runs[(runs["avgPace_sec"] > 0) & (runs["distance_km"] >= 1.0)]
     if valid.empty:
         return []
-
-    targets = [
-        ("5 km",     5.0,      "🥇"),
-        ("10 km",    10.0,     "🥈"),
-        ("Semi",     21.0975,  "🥉"),
-        ("Marathon", 42.195,   "🏅"),
-    ]
-
+    targets = [("5 km", 5.0, "🥇"), ("10 km", 10.0, "🥈"), ("Semi", 21.0975, "🥉"), ("Marathon", 42.195, "🏅")]
     d1 = valid["distance_km"].to_numpy()
-    t1 = valid["avgPace_sec"].to_numpy() * d1  # temps total en secondes
-
+    t1 = valid["avgPace_sec"].to_numpy() * d1
     results = []
     for label, target_km, icon in targets:
-        t2 = t1 * (target_km / d1) ** 1.06     # projection Riegel vectorisée
-        best_sec = float(t2.min())
-
-        h = int(best_sec // 3600)
-        m = int((best_sec % 3600) // 60)
-        s = int(best_sec % 60)
-        time_str = f"{h}h{m:02d}'{s:02d}\"" if h > 0 else f"{m}'{s:02d}\""
-        pace_sec = best_sec / target_km
-        pace_str = f"{int(pace_sec // 60)}:{int(pace_sec % 60):02d}/km"
-        results.append({"label": label, "icon": icon, "time": time_str, "pace": pace_str})
-
+        best_sec = float((t1 * (target_km / d1) ** 1.06).min())
+        h, rem = divmod(int(best_sec), 3600)
+        m, s = divmod(rem, 60)
+        results.append({
+            "label": label, "icon": icon,
+            "time": f"{h}h{m:02d}'{s:02d}\"" if h else f"{m}'{s:02d}\"",
+            "pace": f"{int(best_sec / target_km // 60)}:{int(best_sec / target_km % 60):02d}/km",
+        })
     return results
 
+
 if not running_df.empty:
-    predictions = _predict_race_times(running_df)
-    if predictions:
-        cols = st.columns(len(predictions))
-        for col, pred in zip(cols, predictions):
+    estimates = _riegel_estimates(running_df)
+    if estimates:
+        cols = st.columns(len(estimates))
+        for col, est in zip(cols, estimates):
             with col:
-                st.metric(
-                    label=f"{pred['icon']} {pred['label']}",
-                    value=pred["time"],
-                    delta=pred["pace"],
-                    delta_color="off",
-                )
-        st.caption("Estimations basées sur la formule de Riegel (T2 = T1 × (D2/D1)^1.06) — à titre indicatif.")
-
-        # ── Évolution des prédictions dans le temps ────────────────────────
-        @st.cache_data(ttl=3600)
-        def _riegel_history(runs: pd.DataFrame, window_days: int = 60) -> pd.DataFrame:
-            """
-            Pour chaque semaine, calcule la meilleure prédiction Riegel sur les
-            `window_days` jours précédents. Renvoie un DataFrame avec une colonne
-            par distance cible (en secondes).
-            """
-            valid = runs[(runs["avgPace_sec"] > 0) & (runs["distance_km"] >= 1.0)].copy()
-            if len(valid) < 2:
-                return pd.DataFrame()
-
-            targets = [("5 km", 5.0), ("10 km", 10.0), ("Semi", 21.0975), ("Marathon", 42.195)]
-            valid = valid.sort_values("startTimeLocal")
-
-            first = valid["startTimeLocal"].min()
-            last  = pd.Timestamp(datetime.now())
-            weekly_ends = pd.date_range(first + timedelta(days=window_days), last, freq="W-MON")
-
-            rows = []
-            for week_end in weekly_ends:
-                window = valid[
-                    (valid["startTimeLocal"] > week_end - timedelta(days=window_days))
-                    & (valid["startTimeLocal"] <= week_end)
-                ]
-                if window.empty:
-                    continue
-                d1 = window["distance_km"].to_numpy()
-                t1 = window["avgPace_sec"].to_numpy() * d1
-                row = {"date": week_end}
-                for label, target_km in targets:
-                    t2 = t1 * (target_km / d1) ** 1.06
-                    row[label] = float(t2.min())   # secondes
-                rows.append(row)
-
-            return pd.DataFrame(rows)
-
-        window = st.slider(
-            "Fenêtre glissante (jours)", min_value=14, max_value=90, value=30, step=7,
-            key="riegel_window",
-        )
-        hist = _riegel_history(running_df, window_days=window)
-
-        if not hist.empty:
-            def _fmt_sec(s: float) -> str:
-                h, rem = divmod(int(s), 3600)
-                m, sec = divmod(rem, 60)
-                return f"{h}h{m:02d}'{sec:02d}\"" if h else f"{m}'{sec:02d}\""
-
-            colors = {
-                "5 km":     "#4ade80",
-                "10 km":    "#7c9cfc",
-                "Semi":     "#fb923c",
-                "Marathon": "#f87171",
-            }
-
-            fig_hist = go.Figure()
-            for label, color in colors.items():
-                if label not in hist.columns:
-                    continue
-                col_min = hist[label].min()
-                fig_hist.add_trace(go.Scatter(
-                    x=hist["date"],
-                    y=hist[label] / 60,          # minutes pour l'axe Y
-                    mode="lines",
-                    name=label,
-                    line=dict(color=color, width=2),
-                    customdata=hist[label].apply(_fmt_sec),
-                    hovertemplate=(
-                        f"<b>{label}</b> · %{{x|%b %Y}}<br>"
-                        "Meilleur estimé : <b>%{customdata}</b><extra></extra>"
-                    ),
-                ))
-                # Annotation sur le meilleur point
-                best_idx = hist[label].idxmin()
-                fig_hist.add_annotation(
-                    x=hist.loc[best_idx, "date"],
-                    y=col_min / 60,
-                    text=f"  ↓ {_fmt_sec(col_min)}",
-                    font=dict(color=color, size=10),
-                    showarrow=False,
-                    xanchor="left",
-                )
-
-            fig_hist.update_layout(
-                height=300,
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#ccc"),
-                xaxis=dict(gridcolor="rgba(255,255,255,0.05)", title="Date"),
-                yaxis=dict(
-                    gridcolor="rgba(255,255,255,0.05)",
-                    title="Temps estimé (min)",
-                    tickformat=".0f",
-                ),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-                margin=dict(l=0, r=0, t=30, b=0),
-                hovermode="x unified",
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
-            st.caption(f"Fenêtre glissante de {window} jours — ↓ = amélioration des performances.")
+                st.metric(label=f"{est['icon']} {est['label']}", value=est["time"], delta=est["pace"], delta_color="off")
+        st.caption("Estimations via la formule de Riegel (T2 = T1 × (D2/D1)^1.06) — à titre indicatif.")
 
 st.divider()
 

@@ -474,6 +474,49 @@ class StravaClient:
             "nb_sorties_mois": int(nb_mois),
         }
 
+    def get_best_efforts(self, activity_ids: list[int]) -> dict[str, dict]:
+        """
+        Récupère les best_efforts Strava (meilleurs temps sur distances standard)
+        depuis les détails des activités fournies.
+        Retourne un dict {nom_distance: {elapsed_time, date, activity_name}}.
+        Seuls les efforts avec pr_rank == 1 (record personnel) sont conservés.
+        """
+        cache_key = f"strava_best_efforts_{self.client_id}_{'_'.join(str(i) for i in sorted(activity_ids))}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        self._ensure_connected()
+        best: dict[str, dict] = {}
+
+        for activity_id in activity_ids:
+            try:
+                details = self._get(f"activities/{activity_id}")
+            except Exception as e:
+                logger.warning("Impossible de récupérer l'activité %s : %s", activity_id, e)
+                continue
+
+            activity_name = details.get("name", "")
+            date_str = details.get("start_date_local", "")
+
+            for effort in details.get("best_efforts", []):
+                name = effort.get("name", "")
+                pr_rank = effort.get("pr_rank")
+                elapsed = effort.get("elapsed_time")
+                if not elapsed or not name:
+                    continue
+                # On garde le meilleur effort toutes activités confondues
+                if name not in best or elapsed < best[name]["elapsed_time"]:
+                    best[name] = {
+                        "elapsed_time": elapsed,
+                        "date": date_str,
+                        "activity_name": activity_name,
+                        "pr_rank": pr_rank,
+                    }
+
+        _cache_set(cache_key, best)
+        return best
+
     def invalidate_cache(self) -> None:
         """Supprime les fichiers de cache des données (préserve le token Strava)."""
         for f in CACHE_DIR.glob("*.json"):
