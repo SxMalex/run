@@ -250,7 +250,13 @@ class StravaClient:
                 "avgHR": act.get("average_heartrate"),
                 "maxHR": act.get("max_heartrate"),
                 "avgCadence": cadence,
-                "calories": act.get("calories"),
+                "calories": _estimate_calories(
+                    act.get("calories"),
+                    act.get("kilojoules"),
+                    distance_m,
+                    duration_s,
+                    _normalize_activity_type(sport),
+                ),
                 "elevationGain": act.get("total_elevation_gain"),
                 "avgSpeed_ms": avg_speed_ms,
                 "kudosCount": act.get("kudos_count", 0) or 0,
@@ -479,6 +485,32 @@ class StravaClient:
 # ---------------------------------------------------------------------------
 # Fonctions utilitaires
 # ---------------------------------------------------------------------------
+
+ATHLETE_WEIGHT_KG = float(os.getenv("ATHLETE_WEIGHT_KG", "70"))
+
+
+def _estimate_calories(
+    calories_api: float | None,
+    kilojoules: float | None,
+    distance_m: float,
+    duration_s: float,
+    activity_type: str,
+) -> int | None:
+    """
+    Retourne les calories de l'activité avec plusieurs niveaux de fallback :
+    1. Valeur Strava si disponible et non nulle
+    2. Estimation MET depuis la distance (course) ou kilojoules (vélo/autre)
+    """
+    if calories_api and calories_api > 0:
+        return int(calories_api)
+    # Course : formule coût énergétique running → kcal ≈ poids × distance_km × 1.04
+    if activity_type == "running" and distance_m > 0:
+        return int(ATHLETE_WEIGHT_KG * (distance_m / 1000) * 1.04)
+    # Autre activité avec kilojoules (capteur de puissance)
+    if kilojoules and kilojoules > 0:
+        return int(kilojoules / 4.184)
+    return None
+
 
 def _speed_to_pace(speed_ms: float) -> str:
     """Convertit une vitesse en m/s en pace min:sec/km."""
