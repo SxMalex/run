@@ -226,6 +226,29 @@ def fetch_ors_route(lat: float, lon: float, distance_m: int, seed: int, api_key:
         return None
 
 
+def _build_gpx(route: dict, session_label: str, target_pace_str: str) -> str:
+    """Génère un fichier GPX (course) compatible Garmin Connect."""
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    name = f"Prochaine sortie — {session_label}"
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<gpx version="1.1" creator="Running Dashboard"',
+        '     xmlns="http://www.topografix.com/GPX/1/1"',
+        '     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"',
+        '     xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">',
+        f'  <metadata><name>{name}</name><time>{now}</time></metadata>',
+        '  <trk>',
+        f'    <name>{name}</name>',
+        f'    <desc>Allure cible : {target_pace_str} — {route["distance_km"]:.2f} km · D+ {route["ascent_m"]} m</desc>',
+        '    <trkseg>',
+    ]
+    for i, (lat, lon) in enumerate(zip(route["lats"], route["lons"])):
+        ele_tag = f"<ele>{route['elevations'][i]:.1f}</ele>" if route["elevations"] else ""
+        lines.append(f'      <trkpt lat="{lat:.6f}" lon="{lon:.6f}">{ele_tag}</trkpt>')
+    lines += ["    </trkseg>", "  </trk>", "</gpx>"]
+    return "\n".join(lines)
+
+
 def _parse_ors_route(geojson: dict) -> dict | None:
     """Extrait coordonnées, distance réelle et dénivelé depuis la réponse ORS."""
     try:
@@ -561,3 +584,15 @@ if route:
     if route["elevations"]:
         st.markdown("#### Profil altimétrique")
         _render_elevation_profile(route, s["color"])
+
+    # Export GPX
+    st.divider()
+    gpx_content = _build_gpx(route, s["label"], rec["target_pace_str"])
+    filename = f"parcours_{rec['session_key']}_{route['distance_km']:.1f}km.gpx"
+    st.download_button(
+        label="Télécharger le parcours (.gpx)",
+        data=gpx_content,
+        file_name=filename,
+        mime="application/gpx+xml",
+        use_container_width=True,
+    )
