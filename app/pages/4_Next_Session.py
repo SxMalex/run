@@ -395,6 +395,10 @@ if len(running_df) < 3:
 # Clé ORS
 ors_key = os.getenv("ORS_API_KEY", "")
 
+# Recommandation calculée avant la sidebar pour alimenter les défauts
+rec = _recommend_session(running_df)
+s = rec["session"]
+
 # Sidebar — paramètres
 with st.sidebar:
     st.markdown("## ⚙️ Paramètres")
@@ -407,22 +411,32 @@ with st.sidebar:
         )
 
     st.divider()
-    st.markdown("### Ajustements")
-
-    dist_offset = st.slider(
-        "Ajuster la distance (%)",
-        min_value=-30,
-        max_value=50,
-        value=0,
-        step=5,
-        help="Modifier la distance cible par rapport à la recommandation",
-    )
+    st.markdown("### Parcours")
 
     prefer_trails = st.toggle(
         "Préférer les chemins / sentiers",
         value=False,
         help="Privilégie les chemins hors-route dans le tracé",
     )
+
+    custom_dist = st.number_input(
+        "Distance (km)",
+        min_value=2.0,
+        max_value=100.0,
+        value=float(rec["target_dist_km"]),
+        step=0.5,
+        help=f"Recommandation : {rec['target_dist_km']} km",
+    )
+
+    custom_elev = st.number_input(
+        "D+ cible (m)",
+        min_value=0,
+        max_value=3000,
+        value=int(rec["target_elev"]),
+        step=10,
+        help=f"Recommandation : {rec['target_elev']} m",
+    )
+    st.caption("Le D+ réel dépend du terrain — active 'Sentiers' pour plus de dénivelé.")
 
     st.divider()
     st.markdown("### Point de départ")
@@ -451,15 +465,9 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# Recommandation
-rec = _recommend_session(running_df)
-s = rec["session"]
-
-# Appliquer l'ajustement de distance
-target_dist_km = round(rec["target_dist_km"] * (1 + dist_offset / 100), 1)
-target_dist_km = max(2.0, target_dist_km)
-
-# Recalcul durée avec la distance ajustée
+# Paramètres finaux (valeurs sidebar ou recommandation par défaut)
+target_dist_km = custom_dist
+target_elev_m = custom_elev
 duration_min = round(target_dist_km * rec["target_pace_sec"] / 60)
 
 # ── Section 1 : Type de séance ─────────────────────────────────────────────
@@ -495,7 +503,7 @@ c1.metric("Distance cible", f"{target_dist_km} km",
 c2.metric("Allure cible", rec["target_pace_str"],
           help=f"Allure moyenne récente : {rec['avg_pace_str']}")
 c3.metric("Durée estimée", f"{duration_min} min")
-c4.metric("D+ estimé", f"{rec['target_elev']} m")
+c4.metric("D+ cible", f"{target_elev_m} m")
 
 # Fourchette d'allure
 pace_min = _seconds_to_pace_str(rec["target_pace_sec"] * 0.96)
