@@ -4,7 +4,6 @@ Affiche les métriques clés de la semaine/mois et les dernières activités.
 """
 
 import os
-import numpy as np
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -410,63 +409,6 @@ if not running_df.empty:
             st.caption(f"Fenêtre glissante de {window} jours — ↓ = amélioration des performances.")
 
 st.divider()
-
-# ---------------------------------------------------------------------------
-# Graphique : volume hebdomadaire (12 dernières semaines)
-# ---------------------------------------------------------------------------
-st.subheader("📈 Volume hebdomadaire — 12 dernières semaines")
-
-weekly = client.get_weekly_stats(df)
-
-if not weekly.empty:
-    # Garder seulement les 12 dernières semaines
-    weekly_12 = weekly.tail(12).copy()
-    weekly_12["week_label"] = weekly_12["week"].dt.strftime("S%W\n%d/%m")
-
-    fig_weekly = go.Figure()
-
-    # Barres de volume
-    fig_weekly.add_trace(go.Bar(
-        x=weekly_12["week_label"],
-        y=weekly_12["km_total"],
-        name="Volume (km)",
-        marker_color="rgba(124, 156, 252, 0.8)",
-        marker_line_color="rgba(124, 156, 252, 1)",
-        marker_line_width=1,
-        hovertemplate="<b>%{x}</b><br>Volume : %{y:.1f} km<br>Sorties : %{customdata}<extra></extra>",
-        customdata=weekly_12["nb_sorties"],
-    ))
-
-    # Ligne de tendance
-    if len(weekly_12) >= 3:
-        x_num = list(range(len(weekly_12)))
-        z = np.polyfit(x_num, weekly_12["km_total"], 1)
-        p = np.poly1d(z)
-        fig_weekly.add_trace(go.Scatter(
-            x=weekly_12["week_label"],
-            y=p(x_num),
-            mode="lines",
-            name="Tendance",
-            line=dict(color="rgba(250, 166, 26, 0.8)", width=2, dash="dot"),
-        ))
-
-    fig_weekly.update_layout(
-        height=350,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#ccc"),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.05)", tickfont=dict(size=10)),
-        yaxis=dict(
-            gridcolor="rgba(255,255,255,0.05)",
-            title="Kilomètres",
-        ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=0, r=0, t=10, b=0),
-        hovermode="x unified",
-    )
-    st.plotly_chart(fig_weekly, use_container_width=True)
-else:
-    st.info("Pas assez de données pour afficher le graphique hebdomadaire.")
 
 # ---------------------------------------------------------------------------
 # Tableau des dernières activités
