@@ -254,6 +254,8 @@ class StravaClient:
                 "elevationGain": act.get("total_elevation_gain"),
                 "avgSpeed_ms": avg_speed_ms,
                 "kudosCount": act.get("kudos_count", 0) or 0,
+                "startLat": (act.get("start_latlng") or [None, None])[0],
+                "startLon": (act.get("start_latlng") or [None, None])[1],
             })
 
         _cache_set(cache_key, rows)
