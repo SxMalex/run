@@ -8,7 +8,6 @@ services:
       - ollama
     volumes:
       - ./app:/app
-      - app_cache:/app/.cache
     restart: unless-stopped
 
   ollama:
@@ -27,4 +26,3 @@ services:
 
 volumes:
   ollama_data:
-  app_cache:

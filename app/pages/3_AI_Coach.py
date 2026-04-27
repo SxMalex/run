@@ -144,11 +144,11 @@ with st.sidebar:
 
     st.divider()
 
-    if st.button("🗑️ Effacer l'historique", use_container_width=True):
+    if st.button("🗑️ Effacer l'historique", width='stretch'):
         st.session_state.chat_history = []
         st.rerun()
 
-    if st.button("🔄 Actualiser données", use_container_width=True):
+    if st.button("🔄 Actualiser données", width='stretch'):
         st.cache_data.clear()
         st.session_state.activities_summary = None
         st.rerun()
@@ -237,7 +237,7 @@ with col_btn1:
     analyze_clicked = st.button(
         "🤖 Analyser mon entraînement",
         type="primary",
-        use_container_width=True,
+        width='stretch',
     )
 with col_btn2:
     st.caption(
@@ -302,7 +302,7 @@ if "selected_suggestion" not in st.session_state:
 
 for i, (label, question) in enumerate(suggestions):
     col = suggestion_cols[i % 3]
-    if col.button(label, key=f"sug_{i}", use_container_width=True, help=question):
+    if col.button(label, key=f"sug_{i}", width='stretch', help=question):
         st.session_state.selected_suggestion = question
 
 # Zone de saisie

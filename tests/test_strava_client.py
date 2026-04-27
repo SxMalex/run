@@ -214,12 +214,30 @@ class TestGetWeeklyStats:
         result = self.client.get_weekly_stats(sample_running_df)
         assert result["week"].is_monotonic_increasing
 
-    def test_zero_pace_excluded_from_avg(self, sample_running_df):
-        df = sample_running_df.copy()
-        df.loc[0, "avgPace_sec"] = 0.0
+    def test_zero_pace_excluded_from_avg(self):
+        # Build two activities explicitly in the same week to avoid day-of-week sensitivity
+        monday = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
+        monday -= timedelta(days=monday.weekday())  # rewind to Monday
+        rows = [
+            {"activityId": 1, "startTimeLocal": monday, "activityName": "A",
+             "activityType": "running", "distance_km": 8.0, "duration_min": 45.0,
+             "avgPace": "5:30/km", "avgPace_sec": 0.0,  # zeroed out
+             "avgHR": 150.0, "maxHR": 175.0, "avgCadence": 170.0,
+             "calories": 450, "elevationGain": 80.0, "avgSpeed_ms": 3.0,
+             "kudosCount": 0, "startLat": 48.85, "startLon": 2.35},
+            {"activityId": 2, "startTimeLocal": monday + timedelta(days=2), "activityName": "B",
+             "activityType": "running", "distance_km": 9.0, "duration_min": 50.0,
+             "avgPace": "5:30/km", "avgPace_sec": 330.0,  # valid pace
+             "avgHR": 152.0, "maxHR": 177.0, "avgCadence": 172.0,
+             "calories": 470, "elevationGain": 90.0, "avgSpeed_ms": 3.03,
+             "kudosCount": 1, "startLat": 48.86, "startLon": 2.36},
+        ]
+        df = pd.DataFrame(rows)
+        df["startTimeLocal"] = pd.to_datetime(df["startTimeLocal"])
         result = self.client.get_weekly_stats(df)
-        # La moyenne ne doit pas être nulle si d'autres sorties ont un pace valide
-        assert result["pace_moyen_sec"].iloc[-1] > 0
+        # The week has one zero-pace and one valid — average should use only the valid one
+        assert len(result) == 1
+        assert result["pace_moyen_sec"].iloc[0] == 330.0
 
     def test_filters_out_non_running(self, mixed_activities_df):
         result = self.client.get_weekly_stats(mixed_activities_df)

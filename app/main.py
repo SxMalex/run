@@ -109,7 +109,7 @@ if not TOKEN_FILE.exists():
             st.link_button(
                 "🔗 Connecter à Strava",
                 _auth_url,
-                use_container_width=True,
+                width='stretch',
                 type="primary",
             )
             st.caption(
@@ -160,7 +160,7 @@ with st.sidebar:
         step=10,
     )
 
-    if st.button("🔄 Actualiser les données", use_container_width=True):
+    if st.button("🔄 Actualiser les données", width='stretch'):
         st.cache_data.clear()
         st.session_state.activities_df = None
         st.rerun()
@@ -317,20 +317,20 @@ def _render_last_activity_map(details_data: dict) -> None:
     zoom = 15 if max_range < 0.01 else 13 if max_range < 0.05 else 12 if max_range < 0.15 else 11 if max_range < 0.4 else 10
 
     fig = go.Figure()
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=lats, lon=lons, mode="lines",
         line=dict(width=4, color="#fc4c02"), hoverinfo="none",
     ))
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=[lats[0], lats[-1]], lon=[lons[0], lons[-1]],
         mode="markers", marker=dict(size=14, color=["#22c55e", "#ef4444"]),
         text=["Départ", "Arrivée"], hoverinfo="text",
     ))
     fig.update_layout(
-        mapbox=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=zoom),
+        map=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=zoom),
         height=380, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig)
 
 
 if not running_df.empty:
@@ -383,7 +383,7 @@ if not running_df.empty:
                     yaxis=dict(title="Allure (min/km)", gridcolor="rgba(255,255,255,0.05)", tickformat=".1f"),
                     margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
                 )
-                st.plotly_chart(fig_s, use_container_width=True)
+                st.plotly_chart(fig_s)
 else:
     st.info("Aucune activité de course trouvée dans les données chargées.")
 

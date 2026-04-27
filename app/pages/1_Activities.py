@@ -83,7 +83,7 @@ def _render_map(details_data: dict) -> None:
     fig = go.Figure()
 
     # Tracé de la route
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=lats,
         lon=lons,
         mode="lines",
@@ -93,7 +93,7 @@ def _render_map(details_data: dict) -> None:
     ))
 
     # Marqueurs départ / arrivée
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=[lats[0], lats[-1]],
         lon=[lons[0], lons[-1]],
         mode="markers",
@@ -104,7 +104,7 @@ def _render_map(details_data: dict) -> None:
     ))
 
     fig.update_layout(
-        mapbox=dict(
+        map=dict(
             style="open-street-map",
             center=dict(lat=center_lat, lon=center_lon),
             zoom=zoom,
@@ -114,7 +114,7 @@ def _render_map(details_data: dict) -> None:
         showlegend=False,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig)
 
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
@@ -199,12 +199,14 @@ with st.sidebar:
 
     # Filtre par distance
     if not df.empty and "distance_km" in df.columns:
-        max_dist = float(df["distance_km"].max()) if not df.empty else 50.0
+        import math
+        raw_max = float(df["distance_km"].max()) if not df.empty else 50.0
+        max_dist = max(math.ceil(raw_max * 2) / 2, 1.0)  # round up to nearest 0.5
         dist_range = st.slider(
             "Distance (km)",
             min_value=0.0,
-            max_value=max(max_dist, 1.0),
-            value=(0.0, max(max_dist, 1.0)),
+            max_value=max_dist,
+            value=(0.0, max_dist),
             step=0.5,
         )
     else:
@@ -292,7 +294,7 @@ display = display.rename(columns={
 # Sélection d'une ligne
 selected_event = st.dataframe(
     display,
-    use_container_width=True,
+    width='stretch',
     hide_index=True,
     on_select="rerun",
     selection_mode="single-row",
@@ -385,7 +387,7 @@ if selected_event and selected_event.selection and selected_event.selection.rows
                 margin=dict(l=0, r=0, t=10, b=0),
                 showlegend=False,
             )
-            st.plotly_chart(fig_splits, use_container_width=True)
+            st.plotly_chart(fig_splits)
 
             # Tableau des splits
             splits_display = splits_df[["lap", "distance_km", "duration_min", "pace", "avgHR", "avgCadence", "elevationGain"]].copy()
@@ -402,7 +404,7 @@ if selected_event and selected_event.selection and selected_event.selection.rows
             })
             st.dataframe(
                 splits_display,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 column_config={
                     "Km":           st.column_config.NumberColumn("Km",          format="%d"),

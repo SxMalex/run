@@ -20,6 +20,9 @@ RUN mkdir -p /app/.cache && \
     useradd -m appuser && \
     chown -R appuser /app
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 USER appuser
 
 # Exposer le port Streamlit
@@ -29,7 +32,7 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8501/_stcore/health || exit 1
 
-# Lancer Streamlit
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["streamlit", "run", "main.py", \
      "--server.port=8501", \
      "--server.address=0.0.0.0", \

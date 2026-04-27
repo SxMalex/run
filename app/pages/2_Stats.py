@@ -98,9 +98,24 @@ with st.sidebar:
     period_days = {"3 derniers mois": 90, "6 derniers mois": 180, "12 derniers mois": 365, "Toutes les données": 9999}
     cutoff = datetime.now() - timedelta(days=period_days[period])
 
-    if st.button("🔄 Actualiser", use_container_width=True):
+    if st.button("🔄 Actualiser", width='stretch'):
         st.cache_data.clear()
         st.rerun()
+
+    st.markdown("---")
+    st.markdown("#### ❤️ FC max")
+    recorded_max = running_df["maxHR"].dropna()
+    estimated_max_hr = int(recorded_max.max()) if not recorded_max.empty else 190
+    estimated_max_hr = max(150, min(220, estimated_max_hr))
+    if "max_hr_setting" not in st.session_state:
+        st.session_state["max_hr_setting"] = estimated_max_hr
+    max_hr_setting = st.number_input(
+        "FC max (bpm)", min_value=150, max_value=220,
+        step=1,
+        format="%d",
+        help=f"Estimée à {estimated_max_hr} bpm d'après le pic enregistré sur vos activités Strava.",
+        key="max_hr_setting",
+    )
 
 # Appliquer le filtre de période
 running_filtered = running_df[running_df["startTimeLocal"] >= cutoff].copy()
@@ -114,15 +129,22 @@ client = get_strava_client()
 # ---------------------------------------------------------------------------
 # Onglets
 # ---------------------------------------------------------------------------
-tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite, tab_charge = st.tabs([
-    "📦 Volume", "🐇 Allure", "❤️ Fréquence cardiaque", "🦶 Cadence", "📅 Régularité", "⚡ Charge"
-])
+_TAB_LABELS = ["📦 Volume", "🐇 Allure", "❤️ Fréquence cardiaque", "🦶 Cadence", "📅 Régularité", "⚡ Charge"]
+if "stats_active_tab" not in st.session_state:
+    st.session_state["stats_active_tab"] = _TAB_LABELS[0]
+
+active_tab = st.radio(
+    "Onglet", _TAB_LABELS,
+    key="stats_active_tab",
+    horizontal=True,
+    label_visibility="collapsed",
+)
 
 
 # ============================================================
 # TAB 1 : Volume
 # ============================================================
-with tab_volume:
+if active_tab == "📦 Volume":
     st.subheader("Volume hebdomadaire et mensuel")
 
     col_left, col_right = st.columns(2)
@@ -167,7 +189,7 @@ with tab_volume:
                 margin=dict(l=0, r=0, t=30, b=60),
                 hovermode="x unified",
             )
-            st.plotly_chart(fig_w, use_container_width=True)
+            st.plotly_chart(fig_w)
 
             # Métriques hebdo
             c1, c2, c3 = st.columns(3)
@@ -209,7 +231,7 @@ with tab_volume:
                 showlegend=False,
                 hovermode="x unified",
             )
-            st.plotly_chart(fig_m, use_container_width=True)
+            st.plotly_chart(fig_m)
 
             # Métriques mensuelles
             c1, c2, c3 = st.columns(3)
@@ -238,13 +260,13 @@ with tab_volume:
         margin=dict(l=0, r=0, t=10, b=0),
         showlegend=False,
     )
-    st.plotly_chart(fig_hist, use_container_width=True)
+    st.plotly_chart(fig_hist)
 
 
 # ============================================================
 # TAB 2 : Allure
 # ============================================================
-with tab_allure:
+elif active_tab == "🐇 Allure":
     st.subheader("Évolution de l'allure dans le temps")
 
     pace_data = running_filtered[running_filtered["avgPace_sec"] > 0].copy()
@@ -305,7 +327,7 @@ with tab_allure:
             margin=dict(l=0, r=0, t=30, b=0),
             hovermode="closest",
         )
-        st.plotly_chart(fig_pace, use_container_width=True)
+        st.plotly_chart(fig_pace)
 
         st.caption("⬇️ L'axe Y est inversé : une allure plus basse indique une vitesse plus élevée.")
 
@@ -356,13 +378,13 @@ with tab_allure:
             margin=dict(l=0, r=0, t=30, b=0),
             showlegend=False,
         )
-        st.plotly_chart(fig_pace_dist, use_container_width=True)
+        st.plotly_chart(fig_pace_dist)
 
 
 # ============================================================
 # TAB 3 : Fréquence cardiaque
 # ============================================================
-with tab_fc:
+elif active_tab == "❤️ Fréquence cardiaque":
     st.subheader("Analyse de la fréquence cardiaque")
 
     hr_data = running_filtered.dropna(subset=["avgHR"]).copy()
@@ -413,20 +435,10 @@ with tab_fc:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
                 margin=dict(l=0, r=0, t=30, b=0),
             )
-            st.plotly_chart(fig_hr, use_container_width=True)
+            st.plotly_chart(fig_hr)
 
         with col_right:
             st.markdown("#### Distribution des zones FC")
-            # Estimation depuis les données : max de tous les maxHR enregistrés
-            recorded_max = running_df["maxHR"].dropna()
-            estimated_max_hr = int(recorded_max.max()) if not recorded_max.empty else 190
-            estimated_max_hr = max(150, min(220, estimated_max_hr))
-
-            max_hr_setting = st.number_input(
-                "FC max (bpm)", min_value=150, max_value=220,
-                value=estimated_max_hr, step=1,
-                help=f"Estimée à {estimated_max_hr} bpm d'après le pic enregistré sur vos activités Strava.",
-            )
             hr_zones = client.get_hr_zones(running_filtered, max_hr=max_hr_setting)
 
             if not hr_zones.empty and hr_zones["nb_activites"].sum() > 0:
@@ -455,7 +467,7 @@ with tab_fc:
                     margin=dict(l=0, r=0, t=10, b=0),
                     showlegend=True,
                 )
-                st.plotly_chart(fig_zones, use_container_width=True)
+                st.plotly_chart(fig_zones)
                 st.caption("Distribution estimée d'après la FC moyenne par activité.")
             else:
                 st.info("Pas assez de données FC pour les zones.")
@@ -505,7 +517,7 @@ with tab_fc:
                 coloraxis_colorbar=dict(tickfont=dict(color="#ccc")),
                 margin=dict(l=0, r=0, t=10, b=0),
             )
-            st.plotly_chart(fig_corr, use_container_width=True)
+            st.plotly_chart(fig_corr)
             corr_val = corr_data["avgPace_sec"].corr(corr_data["avgHR"])
             st.caption(f"Corrélation allure/FC : {corr_val:.2f} (proche de 1 = FC monte avec le pace)")
 
@@ -513,7 +525,7 @@ with tab_fc:
 # ============================================================
 # TAB 4 : Cadence
 # ============================================================
-with tab_cadence:
+elif active_tab == "🦶 Cadence":
     st.subheader("Évolution de la cadence de course")
 
     cad_data = running_filtered.dropna(subset=["avgCadence"]).copy()
@@ -570,7 +582,7 @@ with tab_cadence:
             legend=dict(orientation="h", yanchor="bottom", y=1.02),
             margin=dict(l=0, r=0, t=30, b=0),
         )
-        st.plotly_chart(fig_cad, use_container_width=True)
+        st.plotly_chart(fig_cad)
 
         # Stats cadence
         c1, c2, c3, c4 = st.columns(4)
@@ -623,13 +635,13 @@ with tab_cadence:
             margin=dict(l=0, r=0, t=10, b=0),
             showlegend=False,
         )
-        st.plotly_chart(fig_cad_hist, use_container_width=True)
+        st.plotly_chart(fig_cad_hist)
 
 
 # ============================================================
 # TAB 5 : Régularité — Calendar heatmap
 # ============================================================
-with tab_regularite:
+elif active_tab == "📅 Régularité":
     st.subheader("Calendrier de régularité")
 
     from datetime import date, timedelta as td
@@ -739,7 +751,7 @@ with tab_regularite:
         margin=dict(l=40, r=80, t=30, b=10),
     )
 
-    st.plotly_chart(fig_cal, use_container_width=True)
+    st.plotly_chart(fig_cal)
 
     # --- Statistiques de régularité ---
     dates_with_run: set[date] = set(
@@ -795,7 +807,7 @@ with tab_regularite:
 # ============================================================
 # TAB 6 : Charge d'entraînement — CTL / ATL / TSB
 # ============================================================
-with tab_charge:
+elif active_tab == "⚡ Charge":
     st.subheader("Charge d'entraînement — CTL / ATL / TSB")
     st.caption(
         "Modèle fitness/fatigue (PMC) · "
@@ -809,7 +821,10 @@ with tab_charge:
     long_runs = running_df[
         (running_df["distance_km"] >= 8) & (running_df["avgPace_sec"] > 0)
     ]
-    auto_sec = int(long_runs["avgPace_sec"].quantile(0.15)) if not long_runs.empty else 330
+    auto_sec_raw = int(long_runs["avgPace_sec"].quantile(0.15)) if not long_runs.empty else 330
+    # Aligner sur le step=5 du slider (min=180) pour éviter l'erreur JS de validation
+    auto_sec = round((auto_sec_raw - 180) / 5) * 5 + 180
+    auto_sec = max(180, min(480, auto_sec))
 
     # Initialiser la session state UNE SEULE FOIS depuis la valeur auto-détectée.
     # Les reruns suivants utilisent la valeur du session_state, jamais auto_sec.
@@ -981,7 +996,7 @@ with tab_charge:
             margin=dict(l=0, r=60, t=40, b=0),
             hovermode="x unified",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
 
         # ── Zones d'interprétation ────────────────────────────
         st.markdown("#### Interprétation du TSB")

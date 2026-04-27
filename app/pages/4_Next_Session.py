@@ -117,7 +117,7 @@ def _render_route_map(route: dict, session_color: str) -> None:
     fig = go.Figure()
 
     # Contour blanc pour faire ressortir le tracé sur la carte
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=lats, lon=lons,
         mode="lines",
         line=dict(width=9, color="white"),
@@ -125,7 +125,7 @@ def _render_route_map(route: dict, session_color: str) -> None:
         showlegend=False,
     ))
 
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=lats, lon=lons,
         mode="lines",
         line=dict(width=5, color=session_color),
@@ -133,7 +133,7 @@ def _render_route_map(route: dict, session_color: str) -> None:
         name="Parcours",
     ))
 
-    fig.add_trace(go.Scattermapbox(
+    fig.add_trace(go.Scattermap(
         lat=[lats[0], lats[-1]],
         lon=[lons[0], lons[-1]],
         mode="markers",
@@ -144,7 +144,7 @@ def _render_route_map(route: dict, session_color: str) -> None:
     ))
 
     fig.update_layout(
-        mapbox=dict(
+        map=dict(
             style="open-street-map",
             center=dict(lat=center_lat, lon=center_lon),
             zoom=zoom,
@@ -153,7 +153,7 @@ def _render_route_map(route: dict, session_color: str) -> None:
         margin=dict(l=0, r=0, t=0, b=0),
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig)
 
 
 def _render_elevation_profile(route: dict, session_color: str) -> None:
@@ -188,7 +188,7 @@ def _render_elevation_profile(route: dict, session_color: str) -> None:
         margin=dict(l=0, r=0, t=10, b=0),
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +281,7 @@ with st.sidebar:
         sidebar_start_lat = None
         sidebar_start_lon = None
 
-    if st.button("🔄 Actualiser les données", use_container_width=True):
+    if st.button("🔄 Actualiser les données", width='stretch'):
         st.cache_data.clear()
         st.rerun()
 
@@ -355,7 +355,7 @@ if "route_seed" not in st.session_state:
 
 col_regen, col_info = st.columns([1, 3])
 with col_regen:
-    if st.button("🔀 Autre variante", use_container_width=True):
+    if st.button("🔀 Autre variante", width='stretch'):
         st.session_state["route_seed"] += 1
 
 with col_info:
@@ -422,5 +422,5 @@ if route:
         data=gpx_content,
         file_name=filename,
         mime="application/gpx+xml",
-        use_container_width=True,
+        width='stretch',
     )

@@ -28,5 +28,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Streamlit cache
+app/.cache/
+
 # Docker / logs
 *.log

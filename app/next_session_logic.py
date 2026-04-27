@@ -5,7 +5,7 @@ sans dépendance à Streamlit.
 
 import numpy as np
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
 from strava_client import _seconds_to_pace_str
 
 SESSION_TYPES = {
@@ -159,7 +159,7 @@ def parse_ors_route(geojson: dict) -> dict | None:
 
 def build_gpx(route: dict, session_label: str, target_pace_str: str) -> str:
     """Génère un fichier GPX (course) compatible Garmin Connect."""
-    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     name = f"Prochaine sortie — {session_label}"
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
