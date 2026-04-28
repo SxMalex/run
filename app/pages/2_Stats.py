@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 import numpy as np
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, _seconds_to_pace_str
+from strava_client import StravaClient, _seconds_to_pace_str, workout_type_label
 
 
 def _add_trend_line(fig: go.Figure, x, y, ascending_better: bool = False) -> tuple[go.Figure, float | None]:
@@ -63,6 +63,12 @@ def load_data(limit: int = 200) -> tuple[pd.DataFrame, str | None]:
         return pd.DataFrame(), str(e)
 
 
+@st.cache_data(ttl=3600, show_spinner="Chargement des splits km par km...")
+def load_splits_data(activity_ids: tuple[int, ...]) -> pd.DataFrame:
+    client = get_strava_client()
+    return client.get_splits_aggregate(list(activity_ids))
+
+
 # ---------------------------------------------------------------------------
 # Chargement
 # ---------------------------------------------------------------------------
@@ -80,6 +86,9 @@ if df.empty:
 
 # Filtrer les courses
 running_df = df[df["activityType"] == "running"].copy()
+if "workoutType" not in running_df.columns:
+    running_df["workoutType"] = 0
+running_df["workoutLabel"] = running_df["workoutType"].apply(workout_type_label)
 
 if running_df.empty:
     st.warning("Aucune activité de course trouvée.")
@@ -99,7 +108,9 @@ with st.sidebar:
     cutoff = datetime.now() - timedelta(days=period_days[period])
 
     if st.button("🔄 Actualiser", width='stretch'):
+        get_strava_client().invalidate_cache()
         st.cache_data.clear()
+        st.cache_resource.clear()
         st.rerun()
 
     st.markdown("---")
@@ -129,6 +140,13 @@ client = get_strava_client()
 # ---------------------------------------------------------------------------
 # Onglets
 # ---------------------------------------------------------------------------
+_WORKOUT_COLORS = {
+    "Normal": "rgba(124, 156, 252, 0.8)",
+    "Race": "rgba(248, 113, 113, 0.9)",
+    "Sortie longue": "rgba(74, 222, 128, 0.8)",
+    "Entraînement": "rgba(251, 146, 60, 0.8)",
+}
+
 _TAB_LABELS = ["📦 Volume", "🐇 Allure", "❤️ Fréquence cardiaque", "🦶 Cadence", "📅 Régularité", "⚡ Charge"]
 if "stats_active_tab" not in st.session_state:
     st.session_state["stats_active_tab"] = _TAB_LABELS[0]
@@ -262,6 +280,34 @@ if active_tab == "📦 Volume":
     )
     st.plotly_chart(fig_hist)
 
+    # Répartition par type de sortie
+    st.markdown("#### Répartition par type de sortie")
+    type_stats = running_filtered.groupby("workoutLabel").agg(
+        km=("distance_km", "sum"),
+        nb=("activityId", "count"),
+    ).reset_index().sort_values("km", ascending=False)
+
+    fig_types = go.Figure(go.Bar(
+        x=type_stats["workoutLabel"],
+        y=type_stats["km"],
+        marker_color=[_WORKOUT_COLORS.get(t, "#7c9cfc") for t in type_stats["workoutLabel"]],
+        text=type_stats["km"].map("{:.0f} km".format),
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>%{y:.0f} km · %{customdata} sorties<extra></extra>",
+        customdata=type_stats["nb"],
+    ))
+    fig_types.update_layout(
+        height=260,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc"),
+        xaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.05)", title="km"),
+        margin=dict(l=0, r=0, t=30, b=0),
+        showlegend=False,
+    )
+    st.plotly_chart(fig_types)
+
 
 # ============================================================
 # TAB 2 : Allure
@@ -379,6 +425,131 @@ elif active_tab == "🐇 Allure":
             showlegend=False,
         )
         st.plotly_chart(fig_pace_dist)
+
+        # Boxplot allure par type de sortie (si plusieurs types présents)
+        types_present = running_filtered["workoutLabel"].unique()
+        if len(types_present) > 1:
+            st.markdown("#### Allure par type de sortie")
+            type_pace = pace_data.copy()
+            fig_box = go.Figure()
+            for wtype in sorted(types_present):
+                subset = type_pace[type_pace["workoutLabel"] == wtype]["pace_min"]
+                if subset.empty:
+                    continue
+                fig_box.add_trace(go.Box(
+                    y=subset,
+                    name=wtype,
+                    marker_color=_WORKOUT_COLORS.get(wtype, "#7c9cfc"),
+                    boxmean=True,
+                    hovertemplate=f"<b>{wtype}</b><br>%{{y:.2f}} min/km<extra></extra>",
+                ))
+            y_vals = type_pace["pace_min"]
+            fig_box.update_layout(
+                height=300,
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#ccc"),
+                yaxis=dict(
+                    gridcolor="rgba(255,255,255,0.05)",
+                    title="Allure (min/km)",
+                    range=[y_vals.quantile(0.98) * 1.05, y_vals.quantile(0.02) * 0.95],
+                    tickformat=".1f",
+                ),
+                margin=dict(l=0, r=0, t=10, b=0),
+            )
+            st.plotly_chart(fig_box)
+
+        # Analyse des splits km par km
+        st.markdown("#### Analyse des splits par kilomètre")
+        st.caption("Évolution de l'allure km par km sur les 10 dernières sorties de la période.")
+        recent_ids = tuple(
+            running_filtered.sort_values("startTimeLocal", ascending=False)
+            .head(10)["activityId"]
+            .astype(int)
+            .tolist()
+        )
+        if recent_ids:
+            splits_df = load_splits_data(recent_ids)
+            if not splits_df.empty:
+                splits_clean = splits_df[
+                    (splits_df["split"] <= 25)
+                    & (splits_df["pace_sec"] > 180)
+                    & (splits_df["pace_sec"] < 600)
+                ].copy()
+
+                if not splits_clean.empty:
+                    avg_splits = splits_clean.groupby("split")["pace_min"].mean().reset_index()
+                    avg_splits["pace_str"] = avg_splits["pace_min"].apply(
+                        lambda p: f"{int(p)}:{int((p % 1) * 60):02d}/km"
+                    )
+
+                    fig_splits = go.Figure()
+
+                    for aid in splits_clean["activityId"].unique():
+                        act_s = splits_clean[splits_clean["activityId"] == aid].sort_values("split")
+                        fig_splits.add_trace(go.Scatter(
+                            x=act_s["split"],
+                            y=act_s["pace_min"],
+                            mode="lines",
+                            line=dict(color="rgba(124, 156, 252, 0.15)", width=1),
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ))
+
+                    fig_splits.add_trace(go.Scatter(
+                        x=avg_splits["split"],
+                        y=avg_splits["pace_min"],
+                        mode="lines+markers",
+                        name="Allure moyenne",
+                        line=dict(color="rgba(250, 166, 26, 0.9)", width=2.5),
+                        marker=dict(size=6),
+                        customdata=avg_splits["pace_str"],
+                        hovertemplate="<b>Km %{x}</b><br>%{customdata}<extra></extra>",
+                    ))
+
+                    q05 = splits_clean["pace_min"].quantile(0.05)
+                    q95 = splits_clean["pace_min"].quantile(0.95)
+                    pad = (q95 - q05) * 0.15
+
+                    fig_splits.update_layout(
+                        height=350,
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#ccc"),
+                        xaxis=dict(
+                            gridcolor="rgba(255,255,255,0.05)",
+                            title="Kilomètre",
+                            dtick=1,
+                        ),
+                        yaxis=dict(
+                            gridcolor="rgba(255,255,255,0.05)",
+                            title="Allure (min/km)",
+                            range=[q95 + pad, q05 - pad],
+                            tickformat=".1f",
+                        ),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        margin=dict(l=0, r=0, t=30, b=0),
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_splits)
+
+                    # Analyse positive/négative split
+                    max_split = int(splits_clean["split"].max())
+                    mid = max(1, max_split // 2)
+                    first_h = splits_clean[splits_clean["split"] <= mid]["pace_sec"].mean()
+                    second_h = splits_clean[splits_clean["split"] > mid]["pace_sec"].mean()
+                    diff = second_h - first_h
+                    if abs(diff) < 5:
+                        split_msg = "💚 Allure régulière (split neutre)"
+                    elif diff > 0:
+                        split_msg = f"🔴 Split positif : ralentissement moyen de {diff:.0f} sec/km en 2e moitié"
+                    else:
+                        split_msg = f"🟢 Split négatif : accélération moyenne de {abs(diff):.0f} sec/km en 2e moitié"
+                    st.caption(split_msg)
+                else:
+                    st.info("Pas de splits valides disponibles pour la période.")
+            else:
+                st.info("Splits non encore chargés — revenez dans quelques instants.")
 
 
 # ============================================================

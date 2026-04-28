@@ -268,6 +268,7 @@ class StravaClient:
                 "kudosCount": act.get("kudos_count", 0) or 0,
                 "startLat": (act.get("start_latlng") or [None, None])[0],
                 "startLon": (act.get("start_latlng") or [None, None])[1],
+                "workoutType": act.get("workout_type", 0) or 0,
             })
 
         _cache_set(cache_key, rows)
@@ -300,6 +301,7 @@ class StravaClient:
         result = {
             "details": details,
             "splits": splits,
+            "splits_metric": _extract_splits_metric(details),
             "summary": self._summarize_activity(details),
         }
 
@@ -508,6 +510,7 @@ class StravaClient:
             for effort in details.get("best_efforts", []):
                 name = effort.get("name", "")
                 elapsed = effort.get("elapsed_time")
+                pr_rank = effort.get("pr_rank")
                 if not elapsed or not name:
                     continue
                 # On garde le meilleur effort toutes activités confondues
@@ -521,6 +524,63 @@ class StravaClient:
 
         _cache_set(cache_key, best)
         return best
+
+    def get_splits_aggregate(self, activity_ids: list[int]) -> pd.DataFrame:
+        """
+        Charge les splits_metric pour une liste d'activités et retourne un DataFrame
+        long : activityId, split, pace_sec, pace_min, avg_hr, elev_diff.
+        Un délai de 0.5 s est appliqué entre chaque appel non mis en cache pour
+        respecter le rate limit Strava (100 req/15 min).
+        """
+        rows = []
+        for aid in activity_ids:
+            cached = _cache_get(f"strava_activity_detail_{aid}")
+            already_cached = cached is not None
+            try:
+                detail_data = self.get_activity_details(aid)
+                if not already_cached:
+                    time.sleep(0.5)
+                for s in detail_data.get("splits_metric", []):
+                    if s["pace_sec"] <= 0:
+                        continue
+                    rows.append({
+                        "activityId": aid,
+                        "split": s["split"],
+                        "pace_sec": s["pace_sec"],
+                        "pace_min": s["pace_sec"] / 60,
+                        "avg_hr": s.get("avg_hr"),
+                        "elev_diff": s.get("elev_diff", 0) or 0,
+                    })
+            except Exception as e:
+                logger.warning("Splits indisponibles pour l'activité %s : %s", aid, e)
+                if not already_cached:
+                    time.sleep(1.0)
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+    def get_streams(self, activity_id: int) -> dict[str, list]:
+        """
+        Récupère les streams haute-résolution d'une activité.
+        Retourne un dict {type: [valeurs]} — types disponibles selon l'appareil :
+        time, distance, heartrate, altitude, velocity_smooth, cadence, grade_smooth.
+        """
+        cache_key = f"strava_streams_{activity_id}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        self._ensure_connected()
+        keys = "time,distance,heartrate,altitude,velocity_smooth,cadence,grade_smooth"
+        try:
+            raw = self._get(
+                f"activities/{activity_id}/streams",
+                {"keys": keys, "key_by_type": "true"},
+            )
+            result = {k: v.get("data", []) for k, v in raw.items() if isinstance(v, dict)}
+            _cache_set(cache_key, result)
+            return result
+        except Exception as e:
+            logger.warning("Streams indisponibles pour l'activité %s : %s", activity_id, e)
+            return {}
 
     def invalidate_cache(self) -> None:
         """Supprime les fichiers de cache des données (préserve le token Strava)."""
@@ -594,6 +654,36 @@ def _extract_cadence(cadence_rpm: Optional[float], sport_type: str) -> Optional[
     if _normalize_activity_type(sport_type) == "running":
         return round(cadence_rpm * 2, 1)
     return cadence_rpm
+
+
+_WORKOUT_TYPE_LABELS = {
+    0: "Normal", 1: "Race", 2: "Sortie longue", 3: "Entraînement",
+    10: "Normal", 11: "Race", 12: "Sortie",
+}
+
+
+def workout_type_label(wt) -> str:
+    """Traduit le workout_type Strava (entier) en libellé lisible."""
+    return _WORKOUT_TYPE_LABELS.get(int(wt or 0), "Normal")
+
+
+def _extract_splits_metric(details: dict) -> list[dict]:
+    """Extrait les splits par kilomètre depuis les détails d'une activité."""
+    rows = []
+    for i, s in enumerate(details.get("splits_metric", [])):
+        speed = s.get("average_speed", 0) or 0
+        rows.append({
+            "split": s.get("split", i + 1),
+            "distance_m": round(s.get("distance", 0) or 0, 1),
+            "elapsed_s": s.get("elapsed_time", 0) or 0,
+            "moving_s": s.get("moving_time", 0) or 0,
+            "pace_sec": _speed_to_pace_seconds(speed),
+            "pace": _speed_to_pace(speed),
+            "avg_hr": s.get("average_heartrate"),
+            "elev_diff": s.get("elevation_difference", 0) or 0,
+            "pace_zone": s.get("pace_zone"),
+        })
+    return rows
 
 
 def _normalize_activity_type(sport_type: str) -> str:
