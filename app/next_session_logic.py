@@ -5,8 +5,12 @@ sans dépendance à Streamlit.
 
 import numpy as np
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from strava_client import _seconds_to_pace_str
+
+_JOURS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+_MOIS_FR = ["jan.", "fév.", "mars", "avr.", "mai", "juin",
+            "juil.", "août", "sept.", "oct.", "nov.", "déc."]
 
 SESSION_TYPES = {
     "recuperation": {
@@ -46,6 +50,66 @@ SESSION_TYPES = {
         "elev_factor": 1.3,
     },
 }
+
+
+def suggest_next_date(
+    running_df: pd.DataFrame,
+    session_key: str,
+    days_since: int,
+    tsb: float,
+) -> date:
+    """Suggère la prochaine date selon la fréquence habituelle et la fatigue."""
+    today = date.today()
+
+    # Gap typique entre séances (sur les 15 dernières)
+    recent_dates = (
+        running_df
+        .sort_values("startTimeLocal", ascending=False)
+        .head(15)["startTimeLocal"]
+        .dt.date
+        .tolist()
+    )
+    if len(recent_dates) >= 3:
+        gaps = [
+            (recent_dates[i] - recent_dates[i + 1]).days
+            for i in range(min(10, len(recent_dates) - 1))
+            if (recent_dates[i] - recent_dates[i + 1]).days > 0
+        ]
+        typical_gap = round(sum(gaps) / len(gaps)) if gaps else 2
+    else:
+        typical_gap = 2
+    typical_gap = max(1, min(typical_gap, 5))
+
+    # Ajustement fatigue (TSB)
+    if tsb < -20:
+        fatigue_adj = +1    # très fatigué → reporter
+    elif tsb > 10:
+        fatigue_adj = -1    # bien reposé → avancer
+    else:
+        fatigue_adj = 0
+
+    # Ajustement type de séance
+    if session_key in ("tempo", "sortie_longue"):
+        session_adj = +1    # séance exigeante → besoin d'être plus frais
+    elif session_key == "recuperation":
+        session_adj = -1    # séance légère → peut y aller plus tôt
+    else:
+        session_adj = 0
+
+    target_gap = max(1, typical_gap + fatigue_adj + session_adj)
+    days_until = max(0, target_gap - days_since)
+    return today + timedelta(days=days_until)
+
+
+def format_date_fr(d: date) -> str:
+    """Formate une date en français lisible (ex. 'Demain', 'Jeudi 1 mai')."""
+    today = date.today()
+    delta = (d - today).days
+    if delta == 0:
+        return "Aujourd'hui"
+    if delta == 1:
+        return "Demain"
+    return f"{_JOURS_FR[d.weekday()]} {d.day} {_MOIS_FR[d.month - 1]}"
 
 
 def compute_tsb(running_df: pd.DataFrame) -> tuple[float, float, float]:
@@ -118,6 +182,8 @@ def recommend_session(running_df: pd.DataFrame) -> dict:
     target_elev = round(avg_elev * s["elev_factor"]) if avg_elev and not np.isnan(avg_elev) else 0
     duration_min = round(target_dist_km * target_pace_sec / 60)
 
+    suggested_date = suggest_next_date(running_df, session_key, days_since, tsb)
+
     return {
         "session_key": session_key,
         "session": s,
@@ -130,6 +196,8 @@ def recommend_session(running_df: pd.DataFrame) -> dict:
         "duration_min": duration_min,
         "avg_dist": round(avg_dist, 1),
         "avg_pace_str": _seconds_to_pace_str(avg_pace_sec),
+        "suggested_date": suggested_date,
+        "suggested_date_str": format_date_fr(suggested_date),
     }
 
 

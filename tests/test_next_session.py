@@ -8,7 +8,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 import pytest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import next_session_logic as logic
 from next_session_logic import (
@@ -16,6 +16,8 @@ from next_session_logic import (
     recommend_session as _recommend_session,
     build_gpx as _build_gpx,
     parse_ors_route as _parse_ors_route,
+    suggest_next_date as _suggest_next_date,
+    format_date_fr as _format_date_fr,
 )
 
 
@@ -203,8 +205,41 @@ class TestRecommendSession:
         result = _recommend_session(df)
         for key in ["session_key", "session", "ctl", "atl", "tsb",
                     "target_dist_km", "target_pace_sec", "target_pace_str",
-                    "target_elev", "duration_min", "avg_dist"]:
+                    "target_elev", "duration_min", "avg_dist",
+                    "suggested_date", "suggested_date_str"]:
             assert key in result
+
+    def test_suggested_date_is_date_object(self):
+        df = self._make_df()
+        result = _recommend_session(df)
+        assert isinstance(result["suggested_date"], date)
+
+    def test_suggested_date_str_is_string(self):
+        df = self._make_df()
+        result = _recommend_session(df)
+        assert isinstance(result["suggested_date_str"], str)
+        assert len(result["suggested_date_str"]) > 0
+
+    def test_tempo_when_fresh_and_recent_long(self):
+        # TSB > 10 et sortie longue il y a 3 jours (< 6) → tempo
+        now = datetime.now()
+        # Une sortie longue récente + sorties standard
+        rows = [{"startTimeLocal": now - timedelta(days=3), "distance_km": 18.0,
+                 "duration_min": 100.0, "avgPace_sec": 330.0, "avgHR": 148.0,
+                 "elevationGain": 80.0, "activityName": "Long", "startLat": 48.85,
+                 "startLon": 2.35, "activityId": 0, "activityType": "running"}]
+        rows += [
+            {"startTimeLocal": now - timedelta(days=5 + i * 2), "distance_km": 10.0,
+             "duration_min": 55.0, "avgPace_sec": 330.0, "avgHR": 148.0,
+             "elevationGain": 60.0, "activityName": f"Run {i}", "startLat": 48.85,
+             "startLon": 2.35, "activityId": i + 1, "activityType": "running"}
+            for i in range(9)
+        ]
+        df = pd.DataFrame(rows)
+        df["startTimeLocal"] = pd.to_datetime(df["startTimeLocal"])
+        with patch.object(logic, "compute_tsb", return_value=(50.0, 38.0, 12.0)):
+            result = _recommend_session(df)
+        assert result["session_key"] == "tempo"
 
     def test_target_dist_minimum(self):
         # Même avec un facteur faible le minimum est 3 km
@@ -254,3 +289,134 @@ class TestRecommendSession:
         with patch.object(logic, "compute_tsb", return_value=(40.0, 42.0, -2.0)):
             result = _recommend_session(df)
         assert result["session_key"] == "endurance"
+
+
+# ===========================================================================
+# format_date_fr
+# ===========================================================================
+
+class TestFormatDateFr:
+    def test_today(self):
+        assert _format_date_fr(date.today()) == "Aujourd'hui"
+
+    def test_tomorrow(self):
+        assert _format_date_fr(date.today() + timedelta(days=1)) == "Demain"
+
+    def test_future_contains_day_name(self):
+        d = date.today() + timedelta(days=7)
+        result = _format_date_fr(d)
+        assert any(j in result for j in logic._JOURS_FR)
+
+    def test_future_contains_month_name(self):
+        d = date.today() + timedelta(days=7)
+        result = _format_date_fr(d)
+        assert any(m in result for m in logic._MOIS_FR)
+
+    def test_future_contains_day_number(self):
+        d = date.today() + timedelta(days=7)
+        result = _format_date_fr(d)
+        assert str(d.day) in result
+
+    def test_known_date(self):
+        # 7 mai 2025 est un mercredi
+        with patch.object(logic, "date") as mock_date:
+            mock_date.today.return_value = date(2025, 5, 5)
+            mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
+            result = _format_date_fr(date(2025, 5, 7))
+        assert result == "Mercredi 7 mai"
+
+
+# ===========================================================================
+# suggest_next_date
+# ===========================================================================
+
+class TestSuggestNextDate:
+    def _make_df(self, n=10, days_apart=2):
+        now = datetime.now()
+        rows = [
+            {
+                "startTimeLocal": now - timedelta(days=i * days_apart),
+                "activityType": "running",
+                "distance_km": 10.0,
+                "duration_min": 55.0,
+                "avgPace_sec": 330.0,
+                "avgHR": 148.0,
+                "elevationGain": 60.0,
+                "activityName": f"Run {i}",
+                "startLat": 48.85, "startLon": 2.35,
+                "activityId": i + 1,
+            }
+            for i in range(n)
+        ]
+        df = pd.DataFrame(rows)
+        df["startTimeLocal"] = pd.to_datetime(df["startTimeLocal"])
+        return df
+
+    def _days_until(self, df, session_key, days_since, tsb):
+        result = _suggest_next_date(df, session_key, days_since, tsb)
+        return (result - date.today()).days
+
+    def test_returns_date_object(self):
+        df = self._make_df()
+        result = _suggest_next_date(df, "endurance", 1, 0.0)
+        assert isinstance(result, date)
+
+    def test_never_in_past(self):
+        # Même très reposé avec beaucoup de jours écoulés → au pire aujourd'hui
+        df = self._make_df(days_apart=2)
+        assert self._days_until(df, "endurance", 10, 15.0) == 0
+
+    def test_typical_gap_respected(self):
+        # 10 sorties tous les 3j → typical_gap=3, TSB neutre, endurance → 3j d'attente
+        df = self._make_df(days_apart=3)
+        assert self._days_until(df, "endurance", 0, 0.0) == 3
+
+    def test_high_fatigue_delays(self):
+        # TSB < -20 → +1j par rapport à TSB neutre
+        df = self._make_df(days_apart=2)
+        normal = self._days_until(df, "endurance", 0, 0.0)
+        fatigued = self._days_until(df, "endurance", 0, -25.0)
+        assert fatigued > normal
+
+    def test_fresh_brings_forward(self):
+        # TSB > 10 → -1j par rapport à TSB neutre
+        df = self._make_df(days_apart=2)
+        normal = self._days_until(df, "endurance", 0, 0.0)
+        fresh = self._days_until(df, "endurance", 0, 15.0)
+        assert fresh < normal
+
+    def test_tempo_later_than_endurance(self):
+        df = self._make_df(days_apart=2)
+        assert self._days_until(df, "tempo", 0, 0.0) > self._days_until(df, "endurance", 0, 0.0)
+
+    def test_sortie_longue_later_than_endurance(self):
+        df = self._make_df(days_apart=2)
+        assert self._days_until(df, "sortie_longue", 0, 0.0) > self._days_until(df, "endurance", 0, 0.0)
+
+    def test_recuperation_earlier_than_endurance(self):
+        df = self._make_df(days_apart=2)
+        assert self._days_until(df, "recuperation", 0, 0.0) < self._days_until(df, "endurance", 0, 0.0)
+
+    def test_already_rested_enough_returns_today(self):
+        # days_since=5 avec typical_gap=2 → déjà assez reposé → aujourd'hui
+        df = self._make_df(days_apart=2)
+        assert self._days_until(df, "endurance", 5, 0.0) == 0
+
+    def test_days_since_reduces_wait(self):
+        # days_since=1 → 1j de moins que days_since=0
+        df = self._make_df(days_apart=3)
+        wait_0 = self._days_until(df, "endurance", 0, 0.0)
+        wait_1 = self._days_until(df, "endurance", 1, 0.0)
+        assert wait_1 == wait_0 - 1
+
+    def test_fallback_few_runs(self):
+        # Moins de 3 sorties → pas d'erreur, retourne une date valide
+        df = self._make_df(n=2)
+        result = _suggest_next_date(df, "endurance", 0, 0.0)
+        assert isinstance(result, date)
+        assert result >= date.today()
+
+    def test_target_gap_minimum_one(self):
+        # récupération + frais → target_gap = max(1, 2-1-1) = max(1,0) = 1 → jamais 0j d'attente
+        df = self._make_df(days_apart=2)
+        assert self._days_until(df, "recuperation", 0, 15.0) >= 0

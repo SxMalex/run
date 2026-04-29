@@ -17,6 +17,8 @@ from strava_client import (
     _normalize_activity_type,
     _estimate_calories,
     _extract_cadence,
+    _extract_splits_metric,
+    workout_type_label,
     StravaClient,
 )
 
@@ -344,3 +346,254 @@ class TestGetHrZones:
         result = self.client.get_hr_zones(df, max_hr=190)
         z1 = result[result["zone"].str.startswith("Z1")]
         assert z1["nb_activites"].iloc[0] == len(df)
+
+
+# ===========================================================================
+# workout_type_label
+# ===========================================================================
+
+class TestWorkoutTypeLabel:
+    @pytest.mark.parametrize("wt,expected", [
+        (0,  "Normal"),
+        (1,  "Race"),
+        (2,  "Sortie longue"),
+        (3,  "Entraînement"),
+        (10, "Normal"),
+        (11, "Race"),
+        (12, "Sortie"),
+    ])
+    def test_known_values(self, wt, expected):
+        assert workout_type_label(wt) == expected
+
+    def test_none_returns_normal(self):
+        assert workout_type_label(None) == "Normal"
+
+    def test_zero_returns_normal(self):
+        assert workout_type_label(0) == "Normal"
+
+    def test_unknown_value_returns_normal(self):
+        assert workout_type_label(99) == "Normal"
+
+    def test_string_int_accepted(self):
+        assert workout_type_label("1") == "Race"
+
+
+# ===========================================================================
+# _normalize_activity_type — cas manquants
+# ===========================================================================
+
+class TestNormalizeActivityTypeExtra:
+    @pytest.mark.parametrize("sport,expected", [
+        ("Treadmill",       "running"),
+        ("trail_running",   "running"),
+        ("MountainBikeRide","cycling"),
+        ("EBikeRide",       "cycling"),
+        ("strength_training","strength"),
+        ("Workout",         "cardio"),
+        ("Crossfit",        "cardio"),
+        ("cardio_training", "cardio"),
+    ])
+    def test_missing_variants(self, sport, expected):
+        assert _normalize_activity_type(sport) == expected
+
+
+# ===========================================================================
+# _extract_splits_metric
+# ===========================================================================
+
+class TestExtractSplitsMetric:
+    def _split(self, **kwargs):
+        base = {
+            "split": 1,
+            "distance": 1000.0,
+            "elapsed_time": 330,
+            "moving_time": 325,
+            "average_speed": 3.03,
+            "average_heartrate": 150.0,
+            "elevation_difference": 5.0,
+            "pace_zone": 3,
+        }
+        base.update(kwargs)
+        return base
+
+    def test_empty_list(self):
+        assert _extract_splits_metric({"splits_metric": []}) == []
+
+    def test_missing_key(self):
+        assert _extract_splits_metric({}) == []
+
+    def test_split_count(self):
+        details = {"splits_metric": [self._split(split=i) for i in range(1, 4)]}
+        assert len(_extract_splits_metric(details)) == 3
+
+    def test_split_number(self):
+        details = {"splits_metric": [self._split(split=3)]}
+        assert _extract_splits_metric(details)[0]["split"] == 3
+
+    def test_pace_computed_from_speed(self):
+        details = {"splits_metric": [self._split(average_speed=4.0)]}
+        row = _extract_splits_metric(details)[0]
+        assert row["pace_sec"] == pytest.approx(250.0)
+        assert row["pace"] == "4:10/km"
+
+    def test_zero_speed_gives_zero_pace(self):
+        details = {"splits_metric": [self._split(average_speed=0)]}
+        row = _extract_splits_metric(details)[0]
+        assert row["pace_sec"] == 0.0
+
+    def test_none_speed_gives_zero_pace(self):
+        details = {"splits_metric": [self._split(average_speed=None)]}
+        row = _extract_splits_metric(details)[0]
+        assert row["pace_sec"] == 0.0
+
+    def test_missing_hr_is_none(self):
+        details = {"splits_metric": [self._split()]}
+        details["splits_metric"][0].pop("average_heartrate", None)
+        row = _extract_splits_metric(details)[0]
+        assert row["avg_hr"] is None
+
+    def test_elevation_difference(self):
+        details = {"splits_metric": [self._split(elevation_difference=-3.0)]}
+        row = _extract_splits_metric(details)[0]
+        assert row["elev_diff"] == pytest.approx(-3.0)
+
+    def test_none_elev_defaults_zero(self):
+        details = {"splits_metric": [self._split(elevation_difference=None)]}
+        row = _extract_splits_metric(details)[0]
+        assert row["elev_diff"] == 0
+
+
+# ===========================================================================
+# StravaClient._summarize_activity
+# ===========================================================================
+
+class TestSummarizeActivity:
+    def setup_method(self):
+        self.client = StravaClient()
+
+    def _details(self, **kwargs):
+        base = {
+            "distance": 10000.0,
+            "moving_time": 3300,
+            "average_speed": 3.03,
+            "average_heartrate": 148.0,
+            "max_heartrate": 172.0,
+            "average_cadence": 85.0,
+            "calories": 600,
+            "total_elevation_gain": 80.0,
+            "average_watts": None,
+            "sport_type": "Run",
+        }
+        base.update(kwargs)
+        return base
+
+    def test_distance_converted_to_km(self):
+        result = self.client._summarize_activity(self._details(distance=10000.0))
+        assert result["distance_km"] == pytest.approx(10.0)
+
+    def test_duration_converted_to_min(self):
+        result = self.client._summarize_activity(self._details(moving_time=3600))
+        assert result["duration_min"] == pytest.approx(60.0)
+
+    def test_pace_formatted(self):
+        result = self.client._summarize_activity(self._details(average_speed=4.0))
+        assert result["avgPace"] == "4:10/km"
+
+    def test_running_cadence_doubled(self):
+        result = self.client._summarize_activity(self._details(average_cadence=85.0, sport_type="Run"))
+        assert result["avgCadence"] == pytest.approx(170.0)
+
+    def test_cycling_cadence_unchanged(self):
+        result = self.client._summarize_activity(self._details(average_cadence=90.0, sport_type="Ride"))
+        assert result["avgCadence"] == pytest.approx(90.0)
+
+    def test_missing_distance_defaults_zero(self):
+        details = self._details()
+        details.pop("distance")
+        result = self.client._summarize_activity(details)
+        assert result["distance_km"] == 0.0
+
+    def test_none_hr_propagated(self):
+        result = self.client._summarize_activity(self._details(average_heartrate=None))
+        assert result["avgHR"] is None
+
+    def test_all_keys_present(self):
+        result = self.client._summarize_activity(self._details())
+        for key in ["distance_km", "duration_min", "avgPace", "avgHR",
+                    "maxHR", "avgCadence", "calories", "elevationGain", "avgPower"]:
+            assert key in result
+
+
+# ===========================================================================
+# StravaClient.get_best_efforts
+# ===========================================================================
+
+class TestGetBestEfforts:
+    def setup_method(self):
+        self.client = StravaClient()
+
+    def _mock_details(self, activity_name, efforts):
+        """Construit un faux dict d'activité Strava avec best_efforts."""
+        return {
+            "name": activity_name,
+            "start_date_local": "2025-04-01T07:00:00Z",
+            "best_efforts": [
+                {"name": e["name"], "elapsed_time": e["elapsed_time"], "pr_rank": e.get("pr_rank")}
+                for e in efforts
+            ],
+        }
+
+    def _patches(self, get_side_effect=None, get_return=None):
+        """Contexte de mock commun : cache désactivé + connexion bouchonnée."""
+        side = {"side_effect": get_side_effect} if get_side_effect else {"return_value": get_return}
+        return (
+            patch.object(self.client, "_ensure_connected"),
+            patch.object(self.client, "_get", **side),
+            patch("strava_client._cache_get", return_value=None),
+            patch("strava_client._cache_set"),
+        )
+
+    def test_empty_list_returns_empty_dict(self):
+        with patch.object(self.client, "_ensure_connected"), \
+             patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"):
+            result = self.client.get_best_efforts([])
+        assert result == {}
+
+    def test_single_effort_stored(self):
+        details = self._mock_details("Run A", [{"name": "1k", "elapsed_time": 240}])
+        p1, p2, p3, p4 = self._patches(get_return=details)
+        with p1, p2, p3, p4:
+            result = self.client.get_best_efforts([1])
+        assert "1k" in result
+        assert result["1k"]["elapsed_time"] == 240
+
+    def test_best_time_wins_across_activities(self):
+        fast = self._mock_details("Fast Run", [{"name": "1k", "elapsed_time": 210}])
+        slow = self._mock_details("Slow Run", [{"name": "1k", "elapsed_time": 270}])
+        p1, p2, p3, p4 = self._patches(get_side_effect=[fast, slow])
+        with p1, p2, p3, p4:
+            result = self.client.get_best_efforts([1, 2])
+        assert result["1k"]["elapsed_time"] == 210
+        assert result["1k"]["activity_name"] == "Fast Run"
+
+    def test_activity_without_efforts_ignored(self):
+        details = self._mock_details("No efforts", [])
+        p1, p2, p3, p4 = self._patches(get_return=details)
+        with p1, p2, p3, p4:
+            result = self.client.get_best_efforts([1])
+        assert result == {}
+
+    def test_effort_missing_elapsed_time_skipped(self):
+        details = self._mock_details("Run", [{"name": "1k", "elapsed_time": None}])
+        p1, p2, p3, p4 = self._patches(get_return=details)
+        with p1, p2, p3, p4:
+            result = self.client.get_best_efforts([1])
+        assert result == {}
+
+    def test_api_error_skipped_continues(self):
+        good = self._mock_details("Good", [{"name": "5k", "elapsed_time": 1200}])
+        p1, p2, p3, p4 = self._patches(get_side_effect=[Exception("timeout"), good])
+        with p1, p2, p3, p4:
+            result = self.client.get_best_efforts([1, 2])
+        assert "5k" in result

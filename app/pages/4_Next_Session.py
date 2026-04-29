@@ -31,6 +31,33 @@ st.set_page_config(
 
 ORS_API_BASE = "https://api.openrouteservice.org/v2"
 
+
+def _ors_options(session_key: str, prefer_trails: bool, distance_m: int, seed: int) -> dict:
+    """Construit les options ORS adaptées au type de séance."""
+    # 1 waypoint par km → meilleure précision sur la distance générée
+    points = max(4, round(distance_m / 1000))
+
+    # Weightings : quiet évite les grandes routes, green favorise parcs/nature
+    if prefer_trails or session_key == "sortie_longue":
+        weightings = {"green": 0.8, "quiet": 0.4}
+    elif session_key == "tempo":
+        # Allure soutenue → chemins plats, calmes, revêtus
+        weightings = {"quiet": 0.8}
+    elif session_key == "recuperation":
+        # Calme et nature, sans efforts inutiles sur terrain difficile
+        weightings = {"quiet": 0.8, "green": 0.4}
+    else:  # endurance
+        weightings = {"quiet": 0.6, "green": 0.3}
+
+    # Steps autorisés pour sortie longue / trails (escaliers = passages légitimes en nature)
+    avoid = ["ferries", "fords"] if (prefer_trails or session_key == "sortie_longue") else ["ferries", "fords", "steps"]
+
+    return {
+        "avoid_features": avoid,
+        "round_trip": {"length": distance_m, "points": points, "seed": seed},
+        "profile_params": {"weightings": weightings},
+    }
+
 # ---------------------------------------------------------------------------
 # Clients
 # ---------------------------------------------------------------------------
@@ -317,13 +344,21 @@ st.divider()
 # ── Section 3 : Objectifs de la séance ────────────────────────────────────
 st.markdown("### Objectifs de la séance")
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Distance cible", f"{target_dist_km} km",
           help=f"Moyenne récente : {rec['avg_dist']} km")
 c2.metric("Allure cible", rec["target_pace_str"],
           help=f"Allure moyenne récente : {rec['avg_pace_str']}")
 c3.metric("Durée estimée", f"{duration_min} min")
 c4.metric("D+ cible", f"{target_elev_m} m")
+c5.metric(
+    "Date suggérée",
+    rec["suggested_date_str"],
+    help=(
+        f"Basé sur ton rythme habituel et ta fatigue actuelle (TSB {rec['tsb']:+.0f}). "
+        f"Séance le {rec['suggested_date'].strftime('%d/%m/%Y')}."
+    ),
+)
 
 # Fourchette d'allure
 pace_min = _seconds_to_pace_str(rec["target_pace_sec"] * 0.96)
@@ -363,10 +398,9 @@ with col_info:
 
 # Génération du parcours
 distance_m = int(target_dist_km * 1000)
-profile = "foot-hiking" if prefer_trails else "foot-walking"
+profile = "foot-hiking" if (prefer_trails or rec["session_key"] == "sortie_longue") else "foot-walking"
 
 with st.spinner("Génération du parcours en cours..."):
-    # On appelle directement sans mise en cache pour permettre "autre variante"
     url = f"{ORS_API_BASE}/directions/{profile}/geojson"
     headers = {
         "Authorization": ors_key,
@@ -375,21 +409,29 @@ with st.spinner("Génération du parcours en cours..."):
     }
     body = {
         "coordinates": [[start_lon, start_lat]],
-        "options": {
-            "round_trip": {
-                "length": distance_m,
-                "points": 3,
-                "seed": st.session_state["route_seed"],
-            }
-        },
+        "options": _ors_options(
+            rec["session_key"],
+            prefer_trails,
+            distance_m,
+            st.session_state["route_seed"],
+        ),
         "elevation": True,
         "instructions": False,
     }
     try:
         resp = requests.post(url, json=body, headers=headers, timeout=30)
         resp.raise_for_status()
-        geojson = resp.json()
-        route = _parse_ors_route(geojson)
+        route = _parse_ors_route(resp.json())
+
+        # Retry avec distance corrigée si l'écart dépasse 15 %
+        if route and abs(route["distance_km"] - target_dist_km) / target_dist_km > 0.15:
+            factor = target_dist_km / route["distance_km"]
+            body["options"]["round_trip"]["length"] = int(distance_m * factor)
+            resp2 = requests.post(url, json=body, headers=headers, timeout=30)
+            resp2.raise_for_status()
+            corrected = _parse_ors_route(resp2.json())
+            if corrected:
+                route = corrected
     except requests.HTTPError as e:
         st.error(f"Erreur ORS ({e.response.status_code}) : {e.response.text[:400]}")
         route = None
@@ -398,12 +440,30 @@ with st.spinner("Génération du parcours en cours..."):
         route = None
 
 if route:
-    # Métriques du parcours réel
+    # Métriques du parcours réel avec écart vs objectif
+    dist_delta = route["distance_km"] - target_dist_km
+    elev_delta = route["ascent_m"] - target_elev_m
+    duration_real = round(route["distance_km"] * rec["target_pace_sec"] / 60)
+
     r1, r2, r3 = st.columns(3)
-    r1.metric("Distance réelle", f"{route['distance_km']} km")
-    r2.metric("D+ réel", f"{route['ascent_m']} m")
-    duration_real = round(route['distance_km'] * rec["target_pace_sec"] / 60)
+    r1.metric(
+        "Distance réelle", f"{route['distance_km']} km",
+        delta=f"{dist_delta:+.1f} km vs objectif",
+        delta_color="off",
+    )
+    r2.metric(
+        "D+ réel", f"{route['ascent_m']} m",
+        delta=f"{elev_delta:+.0f} m vs objectif",
+        delta_color="off",
+    )
     r3.metric("Durée estimée", f"{duration_real} min")
+
+    if abs(dist_delta) / target_dist_km > 0.20:
+        st.warning(
+            f"Le parcours généré ({route['distance_km']} km) s'écarte de plus de 20% de l'objectif "
+            f"({target_dist_km} km). Essaie une autre variante ou ajuste la distance dans la barre latérale.",
+            icon="⚠️",
+        )
 
     # Carte
     _render_route_map(route, s["color"])
