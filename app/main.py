@@ -314,6 +314,11 @@ def load_last_activity_details(activity_id: int) -> dict:
     return get_strava_client().get_activity_details(activity_id)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_last_activity_streams(activity_id: int) -> dict:
+    return get_strava_client().get_streams(activity_id)
+
+
 def _render_last_activity_map(details_data: dict) -> None:
     map_data = details_data.get("details", {}).get("map", {})
     encoded = map_data.get("polyline") or map_data.get("summary_polyline")
@@ -341,7 +346,68 @@ def _render_last_activity_map(details_data: dict) -> None:
     ))
     fig.update_layout(
         map=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=zoom),
-        height=380, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+        height=300, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+    )
+    st.plotly_chart(fig)
+
+
+def _render_elevation_profile(streams: dict) -> None:
+    alts = streams.get("altitude", [])
+    dists = streams.get("distance", [])
+    if not alts or not dists:
+        st.caption("Profil altimétrique non disponible.")
+        return
+    dists_km = [d / 1000 for d in dists]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=dists_km, y=alts,
+        mode="lines",
+        fill="tozeroy",
+        fillcolor="rgba(252,76,2,0.15)",
+        line=dict(color="#fc4c02", width=2),
+        hovertemplate="<b>%{x:.2f} km</b><br>Altitude : %{y:.0f} m<extra></extra>",
+    ))
+    fig.update_layout(
+        height=210,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc"),
+        xaxis=dict(title="Distance (km)", gridcolor="rgba(255,255,255,0.05)"),
+        yaxis=dict(title="Altitude (m)", gridcolor="rgba(255,255,255,0.05)"),
+        margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
+    )
+    st.plotly_chart(fig)
+
+
+def _render_hr_chart(splits_df: pd.DataFrame, max_hr: int) -> None:
+    hr_data = splits_df["avgHR"].dropna()
+    if hr_data.empty:
+        st.caption("FC non disponible pour cette activité.")
+        return
+
+    def _hr_color(hr):
+        if not hr or pd.isna(hr):
+            return "rgba(100,100,100,0.5)"
+        pct = hr / max_hr
+        if pct < 0.60: return "#3b82f6"   # Z1
+        if pct < 0.70: return "#22c55e"   # Z2
+        if pct < 0.80: return "#eab308"   # Z3
+        if pct < 0.90: return "#f97316"   # Z4
+        return "#ef4444"                   # Z5
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=splits_df["lap"].astype(str),
+        y=splits_df["avgHR"],
+        marker_color=[_hr_color(hr) for hr in splits_df["avgHR"]],
+        hovertemplate="<b>Km %{x}</b><br>FC : %{y:.0f} bpm<extra></extra>",
+    ))
+    fig.update_layout(
+        height=210,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc"),
+        xaxis=dict(title="Km", gridcolor="rgba(255,255,255,0.05)"),
+        yaxis=dict(title="FC (bpm)", gridcolor="rgba(255,255,255,0.05)"),
+        margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
     )
     st.plotly_chart(fig)
 
@@ -365,17 +431,22 @@ if not running_df.empty:
 
     with st.spinner("Chargement de la carte et des splits..."):
         details = load_last_activity_details(int(last["activityId"]))
+        streams = load_last_activity_streams(int(last["activityId"]))
 
     if details:
-        col_map, col_splits = st.columns([3, 2])
+        splits = details.get("splits", [])
+        splits_df = pd.DataFrame(splits) if splits else pd.DataFrame()
+        max_hr = int(details.get("details", {}).get("max_heartrate") or 190)
+
+        # ── Ligne 1 : carte | allure par km ───────────────────────────────
+        col_map, col_pace = st.columns([3, 2])
 
         with col_map:
             _render_last_activity_map(details)
 
-        with col_splits:
-            splits = details.get("splits", [])
-            if splits:
-                splits_df = pd.DataFrame(splits)
+        with col_pace:
+            st.caption("Allure par km")
+            if not splits_df.empty:
                 avg_pace = splits_df.loc[splits_df["pace_sec"] > 0, "pace_sec"].mean()
                 fig_s = go.Figure()
                 fig_s.add_trace(go.Bar(
@@ -389,7 +460,7 @@ if not running_df.empty:
                     customdata=splits_df["pace"],
                 ))
                 fig_s.update_layout(
-                    height=380,
+                    height=300,
                     plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                     font=dict(color="#ccc"),
                     xaxis=dict(title="Km", gridcolor="rgba(255,255,255,0.05)"),
@@ -397,6 +468,18 @@ if not running_df.empty:
                     margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
                 )
                 st.plotly_chart(fig_s)
+
+        # ── Ligne 2 : profil altimétrique | FC par km ─────────────────────
+        col_elev, col_hr = st.columns([3, 2])
+
+        with col_elev:
+            st.caption("Profil altimétrique")
+            _render_elevation_profile(streams)
+
+        with col_hr:
+            st.caption("Fréquence cardiaque par km")
+            if not splits_df.empty:
+                _render_hr_chart(splits_df, max_hr)
 else:
     st.info("Aucune activité de course trouvée dans les données chargées.")
 
