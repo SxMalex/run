@@ -69,6 +69,12 @@ def load_splits_data(activity_ids: tuple[int, ...]) -> pd.DataFrame:
     return client.get_splits_aggregate(list(activity_ids))
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_athlete_zones() -> dict:
+    client = get_strava_client()
+    return client.get_athlete_zones()
+
+
 # ---------------------------------------------------------------------------
 # Chargement
 # ---------------------------------------------------------------------------
@@ -115,18 +121,19 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("#### ❤️ FC max")
+    zones_data = load_athlete_zones()
+    hr_zones_list = (zones_data.get("heart_rate") or {}).get("zones") or []
+    max_hr_from_zones = None
+    if len(hr_zones_list) >= 2:
+        z_last_min = (hr_zones_list[-1] or {}).get("min", 0)
+        if z_last_min and z_last_min > 100:
+            max_hr_from_zones = round(z_last_min / 0.90)
     recorded_max = running_df["maxHR"].dropna()
-    estimated_max_hr = int(recorded_max.max()) if not recorded_max.empty else 190
-    estimated_max_hr = max(150, min(220, estimated_max_hr))
-    if "max_hr_setting" not in st.session_state:
-        st.session_state["max_hr_setting"] = estimated_max_hr
-    max_hr_setting = st.number_input(
-        "FC max (bpm)", min_value=150, max_value=220,
-        step=1,
-        format="%d",
-        help=f"Estimée à {estimated_max_hr} bpm d'après le pic enregistré sur vos activités Strava.",
-        key="max_hr_setting",
-    )
+    max_hr_from_data = int(recorded_max.max()) if not recorded_max.empty else 0
+    max_hr_setting = max(max_hr_from_zones or 0, max_hr_from_data, 150)
+    max_hr_setting = min(max_hr_setting, 220)
+    source = "zones Strava" if max_hr_from_zones and max_hr_from_zones >= max_hr_from_data else "pic enregistré"
+    st.caption(f"**{max_hr_setting} bpm** — estimée d'après le {source}")
 
 # Appliquer le filtre de période
 running_filtered = running_df[running_df["startTimeLocal"] >= cutoff].copy()

@@ -131,6 +131,22 @@ def get_ollama_client() -> OllamaClient:
     return OllamaClient()
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_athlete() -> dict:
+    return get_strava_client().get_athlete()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_athlete_stats() -> dict:
+    return get_strava_client().get_athlete_stats()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_athlete_zones() -> list:
+    zones_data = get_strava_client().get_athlete_zones()
+    return zones_data.get("heart_rate", {}).get("zones", [])
+
+
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités Strava...")
 def load_activities(limit: int = 100) -> tuple[pd.DataFrame, str | None]:
     """
@@ -174,7 +190,9 @@ with st.sidebar:
     )
 
     if st.button("🔄 Actualiser les données", width='stretch'):
+        get_strava_client().invalidate_cache()
         st.cache_data.clear()
+        st.cache_resource.clear()
         st.session_state.activities_df = None
         st.rerun()
 
@@ -229,7 +247,9 @@ st.caption("Analyse de vos performances de course — Données Strava")
 if error:
     st.error(f"**Erreur de connexion Strava**\n\n{error}")
     if st.button("🔄 Reconnecter à Strava"):
+        get_strava_client().invalidate_cache()
         TOKEN_FILE.unlink(missing_ok=True)
+        st.cache_data.clear()
         st.cache_resource.clear()
         st.rerun()
     st.stop()
@@ -237,6 +257,27 @@ if error:
 if df.empty:
     st.warning("Aucune activité trouvée. Vérifiez votre configuration.")
     st.stop()
+
+# Chaussures dans la sidebar — chargé ici, après vérification de la connexion
+with st.sidebar:
+    st.divider()
+    athlete = load_athlete()
+    shoes = athlete.get("shoes", [])
+    if athlete and not shoes:
+        st.markdown("### 👟 Chaussures")
+        st.caption("Aucune chaussure configurée dans ton profil Strava.")
+    elif shoes:
+        st.markdown("### 👟 Chaussures")
+        for shoe in shoes:
+            km = round(shoe.get("distance", 0) / 1000)
+            label = shoe.get("name") or shoe.get("nickname") or f"Chaussure {shoe.get('id', '')}"
+            retired = shoe.get("retired", False)
+            if retired:
+                st.caption(f"~~{label}~~ — {km} km *(retirée)*")
+            else:
+                st.caption(f"**{label}** — {km} km")
+                st.progress(min(km / 800, 1.0), text=f"{min(round(km / 8), 100)} %")
+        st.caption("Objectif indicatif : 800 km")
 
 # ---------------------------------------------------------------------------
 # Métriques résumées
@@ -264,6 +305,32 @@ for col, value, unit, label, icon in metric_data:
         st.metric(label=f"{icon} {label}", value=f"{value} {unit}".strip())
 
 st.divider()
+
+# ---------------------------------------------------------------------------
+# Statistiques de carrière
+# ---------------------------------------------------------------------------
+stats = load_athlete_stats()
+if stats:
+    def _totals(key: str) -> tuple[float, float, int]:
+        t = stats.get(key, {})
+        return round(t.get("distance", 0) / 1000, 0), round(t.get("elevation_gain", 0), 0), t.get("count", 0)
+
+    all_km, all_elev, all_count = _totals("all_run_totals")
+    ytd_km, ytd_elev, ytd_count = _totals("ytd_run_totals")
+    rec_km, rec_elev, rec_count = _totals("recent_run_totals")
+
+    st.subheader("🏆 Statistiques de carrière")
+    s1, s2, s3, s4, s5, s6 = st.columns(6)
+    s1.metric("Km all-time",      f"{all_km:,.0f} km")
+    s2.metric("D+ all-time",      f"{all_elev:,.0f} m")
+    s3.metric("Sorties all-time", f"{all_count:,}")
+    s4.metric("Km cette année",   f"{ytd_km:,.0f} km",
+              delta=f"+{rec_km:.0f} km (4 sem.)", delta_color="off")
+    s5.metric("D+ cette année",   f"{ytd_elev:,.0f} m",
+              delta=f"+{rec_elev:.0f} m (4 sem.)", delta_color="off")
+    s6.metric("Sorties cette année", f"{ytd_count:,}",
+              delta=f"+{rec_count} (4 sem.)", delta_color="off")
+    st.divider()
 
 # ---------------------------------------------------------------------------
 # Estimations de performance — Formule de Riegel
@@ -378,21 +445,29 @@ def _render_elevation_profile(streams: dict) -> None:
     st.plotly_chart(fig)
 
 
-def _render_hr_chart(splits_df: pd.DataFrame, max_hr: int) -> None:
+def _render_hr_chart(splits_df: pd.DataFrame, max_hr: int, hr_zones: list | None = None) -> None:
     hr_data = splits_df["avgHR"].dropna()
     if hr_data.empty:
         st.caption("FC non disponible pour cette activité.")
         return
 
+    _zone_colors = ["#3b82f6", "#22c55e", "#eab308", "#f97316", "#ef4444"]
+
     def _hr_color(hr):
         if not hr or pd.isna(hr):
             return "rgba(100,100,100,0.5)"
+        if hr_zones:
+            for i, z in enumerate(hr_zones):
+                zmax = z["max"] if z["max"] != -1 else float("inf")
+                if z["min"] <= hr < zmax:
+                    return _zone_colors[min(i, 4)]
+            return _zone_colors[-1]
         pct = hr / max_hr
-        if pct < 0.60: return "#3b82f6"   # Z1
-        if pct < 0.70: return "#22c55e"   # Z2
-        if pct < 0.80: return "#eab308"   # Z3
-        if pct < 0.90: return "#f97316"   # Z4
-        return "#ef4444"                   # Z5
+        if pct < 0.60: return _zone_colors[0]
+        if pct < 0.70: return _zone_colors[1]
+        if pct < 0.80: return _zone_colors[2]
+        if pct < 0.90: return _zone_colors[3]
+        return _zone_colors[4]
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -479,7 +554,7 @@ if not running_df.empty:
         with col_hr:
             st.caption("Fréquence cardiaque par km")
             if not splits_df.empty:
-                _render_hr_chart(splits_df, max_hr)
+                _render_hr_chart(splits_df, max_hr, load_athlete_zones())
 else:
     st.info("Aucune activité de course trouvée dans les données chargées.")
 

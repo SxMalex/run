@@ -81,7 +81,7 @@ def get_auth_url(client_id: str, redirect_uri: str) -> str:
         f"&redirect_uri={quote(redirect_uri, safe='')}"
         f"&response_type=code"
         f"&approval_prompt=auto"
-        f"&scope=activity:read_all"
+        f"&scope=activity:read_all,profile:read_all"
     )
 
 
@@ -263,9 +263,6 @@ class StravaClient:
                 "calories": _estimate_calories(
                     act.get("calories"),
                     act.get("kilojoules"),
-                    distance_m,
-                    duration_s,
-                    _normalize_activity_type(sport),
                 ),
                 "elevationGain": act.get("total_elevation_gain"),
                 "avgSpeed_ms": avg_speed_ms,
@@ -486,6 +483,54 @@ class StravaClient:
             "nb_sorties_mois": int(nb_mois),
         }
 
+    def get_athlete(self) -> dict:
+        """Retourne le profil de l'athlète (poids, chaussures, id…)."""
+        cache_key = f"strava_athlete_{self.client_id}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        self._ensure_connected()
+        try:
+            data = self._get("athlete")
+            _cache_set(cache_key, data)
+            return data
+        except Exception as e:
+            logger.warning("Profil athlète indisponible : %s", e)
+            return {}
+
+    def get_athlete_stats(self) -> dict:
+        """Retourne les totaux all-time / YTD / 4 semaines pour course et vélo."""
+        athlete = self.get_athlete()
+        athlete_id = athlete.get("id")
+        if not athlete_id:
+            return {}
+        cache_key = f"strava_athlete_stats_{athlete_id}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            data = self._get(f"athletes/{athlete_id}/stats")
+            _cache_set(cache_key, data)
+            return data
+        except Exception as e:
+            logger.warning("Stats athlète indisponibles : %s", e)
+            return {}
+
+    def get_athlete_zones(self) -> dict:
+        """Retourne les zones FC (et puissance) configurées dans Strava."""
+        cache_key = f"strava_zones_{self.client_id}"
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
+        self._ensure_connected()
+        try:
+            data = self._get("athlete/zones")
+            _cache_set(cache_key, data)
+            return data
+        except Exception as e:
+            logger.warning("Zones athlète indisponibles : %s", e)
+            return {}
+
     def get_best_efforts(self, activity_ids: list[int]) -> dict[str, dict]:
         """
         Récupère les best_efforts Strava (meilleurs temps sur distances standard)
@@ -598,29 +643,19 @@ class StravaClient:
 # Fonctions utilitaires
 # ---------------------------------------------------------------------------
 
-ATHLETE_WEIGHT_KG = float(os.getenv("ATHLETE_WEIGHT_KG", "70"))
-
-
 def _estimate_calories(
     calories_api: float | None,
     kilojoules: float | None,
-    distance_m: float,
-    duration_s: float,
-    activity_type: str,
 ) -> int | None:
     """
-    Retourne les calories de l'activité avec plusieurs niveaux de fallback :
-    1. Valeur Strava si disponible et non nulle
-    2. Estimation MET depuis la distance (course) ou kilojoules (vélo/autre)
+    Retourne les calories depuis Strava.
+    Fallback : kilojoules (capteur de puissance vélo) → kcal via conversion physique.
     """
     if calories_api and calories_api > 0:
         return int(calories_api)
-    # Course : formule coût énergétique running → kcal ≈ poids × distance_km × 1.04
-    if activity_type == "running" and distance_m > 0:
-        return int(ATHLETE_WEIGHT_KG * (distance_m / 1000) * 1.04)
-    # Autre activité avec kilojoules (capteur de puissance)
+    # Convention : 1 kJ mécanique ≈ 1 kcal métabolique (rendement ~25% × 4.184 s'annulent)
     if kilojoules and kilojoules > 0:
-        return int(kilojoules / 4.184)
+        return int(kilojoules)
     return None
 
 

@@ -9,7 +9,6 @@ import pandas as pd
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
-import strava_client as sc
 from strava_client import (
     _speed_to_pace,
     _speed_to_pace_seconds,
@@ -133,36 +132,33 @@ class TestNormalizeActivityType:
 
 class TestEstimateCalories:
     def test_api_value_used_first(self):
-        result = _estimate_calories(500, 1000, 10000, 3600, "running")
+        result = _estimate_calories(500, 1000)
         assert result == 500
 
-    def test_api_zero_falls_through(self):
-        # calories_api=0 → falsy → falls to running formula
-        result = _estimate_calories(0, None, 10000, 3600, "running")
-        expected = int(sc.ATHLETE_WEIGHT_KG * 10.0 * 1.04)
-        assert result == expected
+    def test_api_zero_falls_through_to_kilojoules(self):
+        result = _estimate_calories(0, 200.0)
+        assert result == 200
 
-    def test_running_formula(self):
-        result = _estimate_calories(None, None, 10000, 3600, "running")
-        expected = int(sc.ATHLETE_WEIGHT_KG * 10.0 * 1.04)
-        assert result == expected
-
-    def test_running_zero_distance_returns_none(self):
-        result = _estimate_calories(None, None, 0, 3600, "running")
-        assert result is None
-
-    def test_cycling_with_kilojoules(self):
-        result = _estimate_calories(None, 200.0, 0, 3600, "cycling")
-        assert result == int(200.0 / 4.184)
+    def test_api_none_falls_through_to_kilojoules(self):
+        result = _estimate_calories(None, 200.0)
+        assert result == 200
 
     def test_no_data_returns_none(self):
-        result = _estimate_calories(None, None, 0, 0, "cycling")
+        result = _estimate_calories(None, None)
         assert result is None
 
-    def test_custom_weight(self):
-        with patch.object(sc, "ATHLETE_WEIGHT_KG", 80.0):
-            result = _estimate_calories(None, None, 10000, 3600, "running")
-            assert result == int(80.0 * 10.0 * 1.04)
+    def test_api_zero_no_kj_returns_none(self):
+        result = _estimate_calories(0, None)
+        assert result is None
+
+    def test_kilojoules_1to1_convention(self):
+        # 1 kJ mécanique ≈ 1 kcal métabolique
+        result = _estimate_calories(None, 640.0)
+        assert result == 640
+
+    def test_api_value_integer_cast(self):
+        result = _estimate_calories(499.9, None)
+        assert result == 499
 
 
 # ===========================================================================
