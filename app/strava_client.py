@@ -182,17 +182,21 @@ class StravaClient:
             self.connect()
 
     def _get(self, endpoint: str, params: dict = None) -> dict | list:
-        """Effectue un GET authentifié vers l'API Strava."""
+        """Effectue un GET authentifié vers l'API Strava, avec 1 retry sur erreur 5xx."""
         self._ensure_connected()
         headers = {"Authorization": f"Bearer {self._access_token}"}
-        resp = requests.get(
-            f"{STRAVA_API_BASE}/{endpoint}",
-            headers=headers,
-            params=params or {},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()
+        for attempt in range(2):
+            resp = requests.get(
+                f"{STRAVA_API_BASE}/{endpoint}",
+                headers=headers,
+                params=params or {},
+                timeout=30,
+            )
+            if resp.status_code < 500 or attempt == 1:
+                resp.raise_for_status()
+                return resp.json()
+            logger.warning("Strava 5xx (%s) sur %s, retry dans 2s…", resp.status_code, endpoint)
+            time.sleep(2)
 
     # ------------------------------------------------------------------
     # Récupération des activités

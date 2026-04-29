@@ -5,6 +5,7 @@ Affiche les métriques clés de la semaine/mois et les dernières activités.
 
 import os
 import numpy as np
+import requests as _requests
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -140,6 +141,18 @@ def load_activities(limit: int = 100) -> tuple[pd.DataFrame, str | None]:
     try:
         df = client.get_activities(limit=limit)
         return df, None
+    except _requests.HTTPError as e:
+        status = e.response.status_code
+        if status >= 500:
+            return pd.DataFrame(), (
+                f"Les serveurs Strava sont temporairement indisponibles (erreur {status}). "
+                "Réessaie dans quelques instants."
+            )
+        if status == 401:
+            return pd.DataFrame(), "Token expiré ou révoqué. Reconnecte-toi à Strava."
+        if status == 429:
+            return pd.DataFrame(), "Limite de requêtes Strava atteinte. Réessaie dans 15 minutes."
+        return pd.DataFrame(), f"Erreur Strava ({status})"
     except ValueError as e:
         return pd.DataFrame(), str(e)
     except Exception as e:
