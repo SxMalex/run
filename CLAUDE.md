@@ -4,7 +4,7 @@
 
 - **Streamlit 1.56+** — multipage app (`app/main.py` + `app/pages/`)
 - **Python 3.12**, Pandas, Plotly, NumPy
-- **Docker Compose** — services `app` (Streamlit) et `ollama` (LLM local)
+- **Docker Compose** — service `app` (Streamlit)
 - **Strava API** via OAuth2 — token stocké dans `app/.cache/strava_token.json`
 - **OpenRouteService API** — génération de parcours GPX (page 4)
 
@@ -16,11 +16,10 @@ app/
   pages/
     1_Activities.py        # liste et détails des activités
     2_Stats.py             # graphiques volume / allure / FC / cadence / charge
-    3_AI_Coach.py          # coach IA via Ollama
+    3_AI_Coach.py          # génération de prompts LLM prêts à copier
     4_Next_Session.py      # recommandation de séance + parcours ORS
   strava_client.py         # client Strava + helpers DataFrame
   next_session_logic.py    # logique pure testable (TSB, recommandation, GPX)
-  llm_client.py            # client Ollama
 tests/
   conftest.py              # fixtures pytest
   test_strava_client.py
@@ -30,7 +29,7 @@ tests/
 ## Lancer le projet
 
 ```bash
-docker compose up          # démarre app + ollama
+docker compose up          # démarre l'app Streamlit
 docker compose restart app # recharger après un changement de config Docker
 ```
 
@@ -42,7 +41,7 @@ Streamlit recharge automatiquement les fichiers `.py` modifiés — pas besoin d
 python3 -m pytest tests/ -v
 ```
 
-Les tests sont dans `tests/`, le `pythonpath` pytest pointe sur `app/` (cf. `pytest.ini`). Les tests ne touchent pas Strava ni Ollama — tout est testé via des DataFrames construits en mémoire.
+Les tests sont dans `tests/`, le `pythonpath` pytest pointe sur `app/` (cf. `pytest.ini`). Les tests ne touchent pas l'API Strava — tout est testé via des DataFrames construits en mémoire.
 
 ## Règles Streamlit
 
@@ -59,7 +58,6 @@ Les tests sont dans `tests/`, le `pythonpath` pytest pointe sur `app/` (cf. `pyt
   ```bash
   docker exec -u root run-app-1 chown -R appuser:appuser /app/.cache
   ```
-- Ne jamais recréer le volume `ollama_data` sans raison — le modèle LLM (~4 Go) devrait être re-téléchargé.
 
 ## Logique métier (ne pas casser)
 
@@ -84,6 +82,4 @@ STRAVA_CLIENT_ID=
 STRAVA_CLIENT_SECRET=
 STRAVA_REDIRECT_URI=http://localhost:8501
 ORS_API_KEY=           # optionnel — page Prochaine sortie
-OLLAMA_MODEL=          # ex. llama3.2
-OLLAMA_BASE_URL=http://ollama:11434
 ```

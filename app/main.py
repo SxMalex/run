@@ -13,7 +13,6 @@ import polyline as polyline_lib
 from datetime import datetime, timedelta
 
 from strava_client import StravaClient, TOKEN_FILE, get_auth_url, exchange_code, map_zoom
-from llm_client import OllamaClient
 
 # ---------------------------------------------------------------------------
 # Configuration de la page
@@ -125,12 +124,6 @@ def get_strava_client() -> StravaClient:
     return StravaClient()
 
 
-@st.cache_resource
-def get_ollama_client() -> OllamaClient:
-    """Singleton du client Ollama."""
-    return OllamaClient()
-
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_athlete() -> dict:
     return get_strava_client().get_athlete()
@@ -195,36 +188,6 @@ with st.sidebar:
         st.cache_resource.clear()
         st.session_state.activities_df = None
         st.rerun()
-
-    st.divider()
-
-    # Statut Ollama
-    ollama = get_ollama_client()
-    ollama_ok = ollama.is_available()
-    model_ok = ollama.model_is_available() if ollama_ok else False
-
-    st.markdown("### 🤖 Statut IA")
-    if ollama_ok:
-        st.markdown(
-            '<span class="status-badge status-ok">✓ Ollama connecté</span>',
-            unsafe_allow_html=True,
-        )
-        if model_ok:
-            st.markdown(
-                f'<span class="status-badge status-ok">✓ {ollama.model}</span>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                f'<span class="status-badge status-error">✗ {ollama.model} non trouvé</span>',
-                unsafe_allow_html=True,
-            )
-            st.caption("Lancez : `./scripts/pull_model.sh`")
-    else:
-        st.markdown(
-            '<span class="status-badge status-error">✗ Ollama non disponible</span>',
-            unsafe_allow_html=True,
-        )
 
     st.divider()
     st.caption(f"Dernière mise à jour : {datetime.now().strftime('%H:%M:%S')}")
@@ -571,8 +534,7 @@ st.divider()
 col_l, col_r = st.columns([3, 1])
 with col_l:
     st.caption(
-        "Données issues de l'API officielle Strava. "
-        "Analyse IA propulsée par Ollama (local)."
+        "Données issues de l'API officielle Strava."
     )
 with col_r:
     if not running_df.empty:
