@@ -416,31 +416,27 @@ class StravaClient:
         monthly["month_label"] = monthly["month"].dt.strftime("%b %Y")
         return monthly.sort_values("month")
 
-    def get_hr_zones(self, df: pd.DataFrame, max_hr: int = 190) -> pd.DataFrame:
-        """Estime la distribution des zones de fréquence cardiaque."""
-        if df.empty:
+    def get_hr_zones(self, df: pd.DataFrame, hr_zones: list) -> pd.DataFrame:
+        """Distribue les activités dans les zones FC définies par Strava (bornes bpm réelles)."""
+        if df.empty or not hr_zones:
             return pd.DataFrame()
 
         running_df = df[df["activityType"] == "running"].dropna(subset=["avgHR"]).copy()
         if running_df.empty:
             return pd.DataFrame()
 
-        zones = {
-            "Z1 — Récupération (<60%)": (0, 0.60),
-            "Z2 — Endurance (60-70%)": (0.60, 0.70),
-            "Z3 — Tempo (70-80%)": (0.70, 0.80),
-            "Z4 — Seuil (80-90%)": (0.80, 0.90),
-            "Z5 — VO2max (>90%)": (0.90, 1.01),
-        }
+        rows = []
+        for i, zone in enumerate(hr_zones, 1):
+            low = zone.get("min", 0) or 0
+            high = zone.get("max", -1)
+            unlimited = not high or high < 0
+            label = f"Z{i} (≥{low} bpm)" if unlimited else f"Z{i} ({low}–{high} bpm)"
+            mask = running_df["avgHR"] >= low if unlimited else (
+                (running_df["avgHR"] >= low) & (running_df["avgHR"] < high)
+            )
+            rows.append({"zone": label, "nb_activites": int(mask.sum())})
 
-        counts = {}
-        for zone_name, (low, high) in zones.items():
-            mask = (running_df["avgHR"] >= low * max_hr) & (running_df["avgHR"] < high * max_hr)
-            counts[zone_name] = mask.sum()
-
-        return pd.DataFrame(
-            {"zone": list(counts.keys()), "nb_activites": list(counts.values())}
-        )
+        return pd.DataFrame(rows)
 
     def get_summary_metrics(self, df: pd.DataFrame) -> dict:
         """Retourne les métriques résumées pour la semaine et le mois courants."""

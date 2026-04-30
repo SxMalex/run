@@ -315,38 +315,52 @@ class TestGetSummaryMetrics:
 # ===========================================================================
 
 class TestGetHrZones:
+    _ZONES = [
+        {"min": 0,   "max": 114},
+        {"min": 114, "max": 133},
+        {"min": 133, "max": 152},
+        {"min": 152, "max": 171},
+        {"min": 171, "max": -1},
+    ]
+
     def setup_method(self):
         self.client = StravaClient()
 
     def test_empty_df(self, empty_df):
-        assert self.client.get_hr_zones(empty_df).empty
+        assert self.client.get_hr_zones(empty_df, hr_zones=self._ZONES).empty
+
+    def test_empty_zones_returns_empty(self, sample_running_df):
+        assert self.client.get_hr_zones(sample_running_df, hr_zones=[]).empty
 
     def test_no_running(self, mixed_activities_df):
         cycling_only = mixed_activities_df[mixed_activities_df["activityType"] == "cycling"]
-        assert self.client.get_hr_zones(cycling_only).empty
+        assert self.client.get_hr_zones(cycling_only, hr_zones=self._ZONES).empty
 
     def test_five_zones_returned(self, sample_running_df):
-        result = self.client.get_hr_zones(sample_running_df, max_hr=190)
+        result = self.client.get_hr_zones(sample_running_df, hr_zones=self._ZONES)
         assert len(result) == 5
 
     def test_counts_sum_to_valid_runs(self, sample_running_df):
         valid = sample_running_df.dropna(subset=["avgHR"])
-        result = self.client.get_hr_zones(sample_running_df, max_hr=190)
+        result = self.client.get_hr_zones(sample_running_df, hr_zones=self._ZONES)
         assert result["nb_activites"].sum() == len(valid)
 
     def test_nan_hr_excluded(self, sample_running_df):
         df = sample_running_df.copy()
         df.loc[0, "avgHR"] = np.nan
-        result = self.client.get_hr_zones(df, max_hr=190)
-        valid_count = df["avgHR"].notna().sum()
-        assert result["nb_activites"].sum() == valid_count
+        result = self.client.get_hr_zones(df, hr_zones=self._ZONES)
+        assert result["nb_activites"].sum() == df["avgHR"].notna().sum()
 
     def test_all_in_z1_when_low_hr(self, sample_running_df):
         df = sample_running_df.copy()
-        df["avgHR"] = 50.0  # < 60% de 190 = 114
-        result = self.client.get_hr_zones(df, max_hr=190)
+        df["avgHR"] = 50.0  # < 114 bpm → Z1
+        result = self.client.get_hr_zones(df, hr_zones=self._ZONES)
         z1 = result[result["zone"].str.startswith("Z1")]
         assert z1["nb_activites"].iloc[0] == len(df)
+
+    def test_last_zone_label_has_gte(self, sample_running_df):
+        result = self.client.get_hr_zones(sample_running_df, hr_zones=self._ZONES)
+        assert "≥" in result.iloc[-1]["zone"]
 
 
 # ===========================================================================

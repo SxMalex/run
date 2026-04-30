@@ -7,7 +7,7 @@ import plotly.express as px
 from stats_tabs._shared import add_trend_line
 
 
-def render(running_filtered: pd.DataFrame, client, max_hr_setting: int) -> None:
+def render(running_filtered: pd.DataFrame, client, hr_zones: list) -> None:
     st.subheader("Analyse de la fréquence cardiaque")
 
     hr_data = running_filtered.dropna(subset=["avgHR"]).copy()
@@ -58,11 +58,11 @@ def render(running_filtered: pd.DataFrame, client, max_hr_setting: int) -> None:
 
     with col_right:
         st.markdown("#### Distribution des zones FC")
-        hr_zones = client.get_hr_zones(running_filtered, max_hr=max_hr_setting)
-        if not hr_zones.empty and hr_zones["nb_activites"].sum() > 0:
+        hr_zones_df = client.get_hr_zones(running_filtered, hr_zones=hr_zones)
+        if not hr_zones_df.empty and hr_zones_df["nb_activites"].sum() > 0:
             fig_zones = go.Figure(go.Pie(
-                labels=hr_zones["zone"],
-                values=hr_zones["nb_activites"],
+                labels=hr_zones_df["zone"],
+                values=hr_zones_df["nb_activites"],
                 hole=0.4,
                 marker=dict(colors=["#60a5fa", "#4ade80", "#facc15", "#fb923c", "#f87171"]),
                 textinfo="label+percent",
