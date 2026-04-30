@@ -3,6 +3,7 @@ Page Prochaine sortie — Génère un parcours inédit et des objectifs
 basés sur les dernières activités et la charge d'entraînement.
 """
 
+import copy
 import os
 import requests
 import numpy as np
@@ -11,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, _seconds_to_pace_str
+from strava_client import StravaClient, _seconds_to_pace_str, map_zoom
 from next_session_logic import (
     SESSION_TYPES,
     compute_tsb as _compute_tsb,
@@ -129,17 +130,7 @@ def _render_route_map(route: dict, session_color: str) -> None:
     center_lat = (min(lats) + max(lats)) / 2
     center_lon = (min(lons) + max(lons)) / 2
 
-    max_range = max(max(lats) - min(lats), max(lons) - min(lons))
-    if max_range < 0.01:
-        zoom = 15
-    elif max_range < 0.05:
-        zoom = 13
-    elif max_range < 0.15:
-        zoom = 12
-    elif max_range < 0.4:
-        zoom = 11
-    else:
-        zoom = 10
+    _, _, zoom = map_zoom(lats, lons)
 
     fig = go.Figure()
 
@@ -426,8 +417,9 @@ with st.spinner("Génération du parcours en cours..."):
         # Retry avec distance corrigée si l'écart dépasse 15 %
         if route and abs(route["distance_km"] - target_dist_km) / target_dist_km > 0.15:
             factor = target_dist_km / route["distance_km"]
-            body["options"]["round_trip"]["length"] = int(distance_m * factor)
-            resp2 = requests.post(url, json=body, headers=headers, timeout=30)
+            retry_body = copy.deepcopy(body)
+            retry_body["options"]["round_trip"]["length"] = int(distance_m * factor)
+            resp2 = requests.post(url, json=retry_body, headers=headers, timeout=30)
             resp2.raise_for_status()
             corrected = _parse_ors_route(resp2.json())
             if corrected:

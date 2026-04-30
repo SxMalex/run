@@ -2,13 +2,17 @@
 Tests des fonctions utilitaires et méthodes DataFrame de strava_client.py
 """
 
+import hashlib
+import json
 import math
+import time
 import pytest
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import strava_client as sc
 from strava_client import (
     _speed_to_pace,
     _speed_to_pace_seconds,
@@ -17,6 +21,8 @@ from strava_client import (
     _estimate_calories,
     _extract_cadence,
     _extract_splits_metric,
+    _cache_get,
+    _cache_set,
     workout_type_label,
     StravaClient,
 )
@@ -213,9 +219,8 @@ class TestGetWeeklyStats:
         assert result["week"].is_monotonic_increasing
 
     def test_zero_pace_excluded_from_avg(self):
-        # Build two activities explicitly in the same week to avoid day-of-week sensitivity
-        monday = datetime.now().replace(hour=10, minute=0, second=0, microsecond=0)
-        monday -= timedelta(days=monday.weekday())  # rewind to Monday
+        # Fixed Monday so the test is not sensitive to the day the suite runs
+        monday = datetime(2024, 1, 1, 10, 0, 0)  # 2024-01-01 is a known Monday
         rows = [
             {"activityId": 1, "startTimeLocal": monday, "activityName": "A",
              "activityType": "running", "distance_km": 8.0, "duration_min": 45.0,
@@ -593,3 +598,114 @@ class TestGetBestEfforts:
         with p1, p2, p3, p4:
             result = self.client.get_best_efforts([1, 2])
         assert "5k" in result
+
+
+# ===========================================================================
+# Cache TTL boundary conditions
+# ===========================================================================
+
+class TestCacheTTL:
+    KEY = "test_cache_ttl_key"
+
+    def _write_entry(self, cache_dir, key: str, data, timestamp: float) -> None:
+        safe_key = hashlib.md5(key.encode()).hexdigest()
+        (cache_dir / f"{safe_key}.json").write_text(
+            json.dumps({"timestamp": timestamp, "data": data})
+        )
+
+    def test_fresh_data_returned(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        _cache_set(self.KEY, {"value": 42})
+        assert _cache_get(self.KEY) == {"value": 42}
+
+    def test_expired_data_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        old_ts = time.time() - sc.CACHE_TTL - 1
+        self._write_entry(tmp_path, self.KEY, {"value": 99}, old_ts)
+        assert _cache_get(self.KEY) is None
+
+    def test_expired_file_is_deleted(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        old_ts = time.time() - sc.CACHE_TTL - 1
+        self._write_entry(tmp_path, self.KEY, {"value": 99}, old_ts)
+        _cache_get(self.KEY)
+        safe_key = hashlib.md5(self.KEY.encode()).hexdigest()
+        assert not (tmp_path / f"{safe_key}.json").exists()
+
+    def test_boundary_at_exact_ttl_is_expired(self, monkeypatch, tmp_path):
+        # Condition is strict <, so age == CACHE_TTL → expired.
+        # Setting timestamp to now - CACHE_TTL means any subsequent read
+        # will see age >= CACHE_TTL, which fails the strict < check.
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        boundary_ts = time.time() - sc.CACHE_TTL
+        self._write_entry(tmp_path, self.KEY, {"value": 1}, boundary_ts)
+        assert _cache_get(self.KEY) is None
+
+    def test_just_before_ttl_is_hit(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        recent_ts = time.time() - sc.CACHE_TTL + 60  # 60 s before expiry
+        self._write_entry(tmp_path, self.KEY, {"value": 7}, recent_ts)
+        assert _cache_get(self.KEY) == {"value": 7}
+
+    def test_corrupted_json_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        safe_key = hashlib.md5(self.KEY.encode()).hexdigest()
+        (tmp_path / f"{safe_key}.json").write_text("not valid json {{")
+        assert _cache_get(self.KEY) is None
+
+    def test_missing_file_returns_none(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        assert _cache_get("nonexistent_key_xyz") is None
+
+
+# ===========================================================================
+# _ensure_connected call contract
+# ===========================================================================
+
+class TestEnsureConnectedContract:
+    """_ensure_connected must be called on cache miss and skipped on cache hit."""
+
+    def setup_method(self):
+        self.client = StravaClient()
+        self._minimal_details = {
+            "distance": 10000.0,
+            "moving_time": 3300,
+            "average_speed": 3.03,
+            "sport_type": "Run",
+            "average_heartrate": None,
+            "max_heartrate": None,
+            "average_cadence": None,
+            "calories": None,
+            "kilojoules": None,
+            "total_elevation_gain": None,
+            "average_watts": None,
+        }
+
+    def test_get_streams_calls_ensure_connected_on_miss(self):
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_ensure_connected") as mock_connect, \
+             patch.object(self.client, "_get", return_value={"heartrate": {"data": [150]}}):
+            self.client.get_streams(42)
+        mock_connect.assert_called_once()
+
+    def test_get_streams_skips_ensure_connected_on_hit(self):
+        with patch("strava_client._cache_get", return_value={"heartrate": [150]}), \
+             patch.object(self.client, "_ensure_connected") as mock_connect:
+            self.client.get_streams(42)
+        mock_connect.assert_not_called()
+
+    def test_get_activity_details_calls_ensure_connected_on_miss(self):
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_ensure_connected") as mock_connect, \
+             patch.object(self.client, "_get", side_effect=[self._minimal_details, []]):
+            self.client.get_activity_details(99)
+        mock_connect.assert_called_once()
+
+    def test_get_activity_details_skips_ensure_connected_on_hit(self):
+        cached = {"details": {}, "splits": [], "splits_metric": [], "summary": {}}
+        with patch("strava_client._cache_get", return_value=cached), \
+             patch.object(self.client, "_ensure_connected") as mock_connect:
+            self.client.get_activity_details(99)
+        mock_connect.assert_not_called()

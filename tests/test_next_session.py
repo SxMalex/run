@@ -71,6 +71,26 @@ class TestParseOrsRoute:
         del geojson["features"][0]["properties"]["summary"]
         assert _parse_ors_route(geojson) is None
 
+    def test_empty_coords_returns_none(self):
+        assert _parse_ors_route({
+            "features": [{
+                "geometry": {"coordinates": []},
+                "properties": {
+                    "summary": {"distance": 5000.0, "duration": 1800.0},
+                    "ascent": 10,
+                },
+            }]
+        }) is None
+
+    def test_missing_geometry_returns_none(self):
+        assert _parse_ors_route({
+            "features": [{
+                "properties": {
+                    "summary": {"distance": 5000.0, "duration": 1800.0},
+                }
+            }]
+        }) is None
+
 
 # ===========================================================================
 # _build_gpx
@@ -110,6 +130,37 @@ class TestBuildGpx:
     def test_pace_in_description(self, sample_route):
         gpx = _build_gpx(sample_route, "Tempo", "4:45/km")
         assert "4:45/km" in gpx
+
+
+# ===========================================================================
+# build_gpx — round-trip coordinate fidelity
+# ===========================================================================
+
+class TestBuildGpxRoundtrip:
+    NS = {"gpx": "http://www.topografix.com/GPX/1/1"}
+
+    def test_lat_lon_survive_roundtrip(self, sample_route):
+        gpx = _build_gpx(sample_route, "Endurance", "5:30/km")
+        root = ET.fromstring(gpx)
+        trkpts = root.findall(".//gpx:trkpt", self.NS)
+        assert len(trkpts) == len(sample_route["lats"])
+        for i, pt in enumerate(trkpts):
+            assert float(pt.attrib["lat"]) == pytest.approx(sample_route["lats"][i], abs=1e-5)
+            assert float(pt.attrib["lon"]) == pytest.approx(sample_route["lons"][i], abs=1e-5)
+
+    def test_elevations_survive_roundtrip(self, sample_route):
+        gpx = _build_gpx(sample_route, "Endurance", "5:30/km")
+        root = ET.fromstring(gpx)
+        ele_tags = root.findall(".//gpx:trkpt/gpx:ele", self.NS)
+        assert len(ele_tags) == len(sample_route["elevations"])
+        for i, ele in enumerate(ele_tags):
+            assert float(ele.text) == pytest.approx(sample_route["elevations"][i], abs=0.1)
+
+    def test_no_elevations_produces_no_ele_tags(self, sample_route):
+        route = {**sample_route, "elevations": []}
+        gpx = _build_gpx(route, "Endurance", "5:30/km")
+        root = ET.fromstring(gpx)
+        assert root.findall(".//gpx:trkpt/gpx:ele", self.NS) == []
 
 
 # ===========================================================================

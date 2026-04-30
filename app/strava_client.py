@@ -7,6 +7,7 @@ import json
 import time
 import hashlib
 import logging
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,8 @@ import numpy as np
 import requests
 
 logger = logging.getLogger(__name__)
+
+_token_refresh_lock = threading.Lock()
 
 CACHE_DIR = Path(os.getenv("CACHE_DIR", "/app/.cache"))
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))
@@ -147,10 +150,19 @@ class StravaClient:
         except (json.JSONDecodeError, OSError) as e:
             raise ValueError(f"Impossible de lire le fichier de token Strava : {e}") from e
 
-        # Rafraîchit si le token expire dans moins de 5 minutes
+        # Rafraîchit si le token expire dans moins de 5 minutes.
+        # Double-checked locking : un seul thread effectue le refresh,
+        # les autres réutilisent le token fraîchement écrit sur disque.
         if time.time() > token_data.get("expires_at", 0) - 300:
-            logger.info("Token Strava expiré, rafraîchissement...")
-            token_data = self._refresh_token(token_data["refresh_token"])
+            with _token_refresh_lock:
+                try:
+                    with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+                        token_data = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    pass
+                if time.time() > token_data.get("expires_at", 0) - 300:
+                    logger.info("Token Strava expiré, rafraîchissement...")
+                    token_data = self._refresh_token(token_data["refresh_token"])
 
         self._access_token = token_data["access_token"]
         self._connected = True
@@ -239,9 +251,9 @@ class StravaClient:
 
         rows = []
         for act in activities:
-            distance_m = act.get("distance", 0) or 0
-            duration_s = act.get("moving_time", 0) or 0
-            avg_speed_ms = act.get("average_speed", 0) or 0
+            distance_m = act.get("distance", 0)
+            duration_s = act.get("moving_time", 0)
+            avg_speed_ms = act.get("average_speed", 0)
             sport = act.get("sport_type") or act.get("type", "unknown")
 
             avg_pace_str = _speed_to_pace(avg_speed_ms)
@@ -266,7 +278,7 @@ class StravaClient:
                 ),
                 "elevationGain": act.get("total_elevation_gain"),
                 "avgSpeed_ms": avg_speed_ms,
-                "kudosCount": act.get("kudos_count", 0) or 0,
+                "kudosCount": act.get("kudos_count", 0),
                 "startLat": (act.get("start_latlng") or [None, None])[0],
                 "startLon": (act.get("start_latlng") or [None, None])[1],
                 "workoutType": act.get("workout_type", 0) or 0,
@@ -281,7 +293,9 @@ class StravaClient:
     def get_activity_details(self, activity_id: int) -> dict:
         """
         Récupère les détails complets d'une activité spécifique.
-        Retourne un dictionnaire avec les métriques détaillées et les laps.
+        Retourne un dict avec les clés "details", "splits", "splits_metric", "summary".
+        Retourne {} en cas d'erreur API (l'erreur est loggée) ; les appelants
+        doivent tester `if not result` pour distinguer erreur et données réelles.
         """
         cache_key = f"strava_activity_detail_{activity_id}"
         cached = _cache_get(cache_key)
@@ -361,61 +375,44 @@ class StravaClient:
 
     def get_weekly_stats(self, df: pd.DataFrame) -> pd.DataFrame:
         """Agrège les activités par semaine."""
-        if df.empty:
+        running_df = _filter_running(df)
+        if running_df is None:
             return pd.DataFrame()
-
-        running_df = df[df["activityType"] == "running"].copy()
-        if running_df.empty:
-            return pd.DataFrame()
-
         running_df["week"] = running_df["startTimeLocal"].dt.to_period("W").apply(
             lambda r: r.start_time
         )
-
         weekly = (
             running_df.groupby("week")
             .agg(
                 km_total=("distance_km", "sum"),
                 nb_sorties=("activityId", "count"),
-                pace_moyen_sec=("avgPace_sec", lambda x: x[x > 0].mean() if (x > 0).any() else 0),
+                pace_moyen_sec=("avgPace_sec", _agg_mean_pace),
                 hr_moyen=("avgHR", "mean"),
                 denivele_total=("elevationGain", "sum"),
             )
             .reset_index()
         )
-
-        weekly["pace_moyen"] = weekly["pace_moyen_sec"].apply(_seconds_to_pace_str)
-        weekly["km_total"] = weekly["km_total"].round(1)
-        weekly["hr_moyen"] = weekly["hr_moyen"].round(0)
-        return weekly.sort_values("week")
+        return _finalize_stats(weekly).sort_values("week")
 
     def get_monthly_stats(self, df: pd.DataFrame) -> pd.DataFrame:
         """Agrège les activités par mois."""
-        if df.empty:
+        running_df = _filter_running(df)
+        if running_df is None:
             return pd.DataFrame()
-
-        running_df = df[df["activityType"] == "running"].copy()
-        if running_df.empty:
-            return pd.DataFrame()
-
         running_df["month"] = running_df["startTimeLocal"].dt.to_period("M").apply(
             lambda r: r.start_time
         )
-
         monthly = (
             running_df.groupby("month")
             .agg(
                 km_total=("distance_km", "sum"),
                 nb_sorties=("activityId", "count"),
-                pace_moyen_sec=("avgPace_sec", lambda x: x[x > 0].mean() if (x > 0).any() else 0),
+                pace_moyen_sec=("avgPace_sec", _agg_mean_pace),
                 hr_moyen=("avgHR", "mean"),
             )
             .reset_index()
         )
-
-        monthly["pace_moyen"] = monthly["pace_moyen_sec"].apply(_seconds_to_pace_str)
-        monthly["km_total"] = monthly["km_total"].round(1)
-        monthly["hr_moyen"] = monthly["hr_moyen"].round(0)
+        monthly = _finalize_stats(monthly)
         monthly["month_label"] = monthly["month"].dt.strftime("%b %Y")
         return monthly.sort_values("month")
 
@@ -578,32 +575,34 @@ class StravaClient:
         """
         Charge les splits_metric pour une liste d'activités et retourne un DataFrame
         long : activityId, split, pace_sec, pace_min, avg_hr, elev_diff.
-        Un délai de 0.5 s est appliqué entre chaque appel non mis en cache pour
-        respecter le rate limit Strava (100 req/15 min).
+        Un délai de 0.5 s est appliqué entre chaque appel API réel pour respecter
+        le rate limit Strava (100 req/15 min) ; les hits de cache sont instantanés.
         """
         rows = []
         for aid in activity_ids:
-            cached = _cache_get(f"strava_activity_detail_{aid}")
-            already_cached = cached is not None
-            try:
-                detail_data = self.get_activity_details(aid)
-                if not already_cached:
+            cache_key = f"strava_activity_detail_{aid}"
+            detail_data = _cache_get(cache_key)
+            if detail_data is None:
+                try:
+                    detail_data = self.get_activity_details(aid)
                     time.sleep(0.5)
-                for s in detail_data.get("splits_metric", []):
-                    if s["pace_sec"] <= 0:
-                        continue
-                    rows.append({
-                        "activityId": aid,
-                        "split": s["split"],
-                        "pace_sec": s["pace_sec"],
-                        "pace_min": s["pace_sec"] / 60,
-                        "avg_hr": s.get("avg_hr"),
-                        "elev_diff": s.get("elev_diff", 0) or 0,
-                    })
-            except Exception as e:
-                logger.warning("Splits indisponibles pour l'activité %s : %s", aid, e)
-                if not already_cached:
+                except Exception as e:
+                    logger.warning("Splits indisponibles pour l'activité %s : %s", aid, e)
                     time.sleep(1.0)
+                    continue
+            if not detail_data:
+                continue
+            for s in detail_data.get("splits_metric", []):
+                if s["pace_sec"] <= 0:
+                    continue
+                rows.append({
+                    "activityId": aid,
+                    "split": s["split"],
+                    "pace_sec": s["pace_sec"],
+                    "pace_min": s["pace_sec"] / 60,
+                    "avg_hr": s.get("avg_hr"),
+                    "elev_diff": s.get("elev_diff", 0) or 0,
+                })
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
     def get_streams(self, activity_id: int) -> dict[str, list]:
@@ -680,6 +679,47 @@ def _seconds_to_pace_str(pace_sec: float) -> str:
     minutes = int(pace_sec // 60)
     seconds = int(pace_sec % 60)
     return f"{minutes}:{seconds:02d}/km"
+
+
+def map_zoom(lats: list[float], lons: list[float]) -> tuple[float, float, int]:
+    """Retourne (center_lat, center_lon, zoom) depuis une liste de coordonnées."""
+    center_lat = (min(lats) + max(lats)) / 2
+    center_lon = (min(lons) + max(lons)) / 2
+    max_range = max(max(lats) - min(lats), max(lons) - min(lons))
+    if max_range < 0.01:
+        zoom = 15
+    elif max_range < 0.05:
+        zoom = 13
+    elif max_range < 0.15:
+        zoom = 12
+    elif max_range < 0.4:
+        zoom = 11
+    elif max_range < 1.0:
+        zoom = 10
+    else:
+        zoom = 9
+    return center_lat, center_lon, zoom
+
+
+def _agg_mean_pace(x):
+    """Moyenne de pace en ignorant les valeurs nulles (utilisée dans groupby.agg)."""
+    return x[x > 0].mean() if (x > 0).any() else 0
+
+
+def _filter_running(df: pd.DataFrame) -> pd.DataFrame | None:
+    """Filtre aux activités de course ; retourne None si vide."""
+    if df.empty:
+        return None
+    runs = df[df["activityType"] == "running"].copy()
+    return runs if not runs.empty else None
+
+
+def _finalize_stats(agg: pd.DataFrame) -> pd.DataFrame:
+    """Applique les transformations communes aux DataFrames d'agrégation."""
+    agg["pace_moyen"] = agg["pace_moyen_sec"].apply(_seconds_to_pace_str)
+    agg["km_total"] = agg["km_total"].round(1)
+    agg["hr_moyen"] = agg["hr_moyen"].round(0)
+    return agg
 
 
 def _extract_cadence(cadence_rpm: Optional[float], sport_type: str) -> Optional[float]:

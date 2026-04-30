@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
 import polyline as polyline_lib
 
-from strava_client import StravaClient
+from strava_client import StravaClient, map_zoom
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -63,23 +63,7 @@ def _render_map(details_data: dict) -> None:
     lats = [c[0] for c in coords]
     lons = [c[1] for c in coords]
 
-    center_lat = (min(lats) + max(lats)) / 2
-    center_lon = (min(lons) + max(lons)) / 2
-
-    # Calcul automatique du zoom selon l'emprise de la sortie
-    max_range = max(max(lats) - min(lats), max(lons) - min(lons))
-    if max_range < 0.01:
-        zoom = 15
-    elif max_range < 0.05:
-        zoom = 13
-    elif max_range < 0.15:
-        zoom = 12
-    elif max_range < 0.4:
-        zoom = 11
-    elif max_range < 1.0:
-        zoom = 10
-    else:
-        zoom = 9
+    center_lat, center_lon, zoom = map_zoom(lats, lons)
 
     fig = go.Figure()
 
@@ -487,7 +471,7 @@ selected_event = st.dataframe(
 # ---------------------------------------------------------------------------
 # Détails de l'activité sélectionnée
 # ---------------------------------------------------------------------------
-if selected_event and selected_event.selection and selected_event.selection.rows:
+if selected_event.selection.rows:
     selected_idx = selected_event.selection.rows[0]
     selected_row = filtered.iloc[selected_idx]
     activity_id = selected_row["activityId"]
@@ -574,7 +558,6 @@ if selected_event and selected_event.selection and selected_event.selection.rows
             for col in ["avgHR", "avgCadence", "elevationGain"]:
                 splits_display[col] = pd.to_numeric(splits_display[col], errors="coerce")
             splits_display = splits_display.rename(columns={
-                "lap": "lap",
                 "distance_km": "Distance (km)",
                 "duration_min": "Durée (min)",
                 "pace": "Allure",
@@ -587,7 +570,7 @@ if selected_event and selected_event.selection and selected_event.selection.rows
                 width='stretch',
                 hide_index=True,
                 column_config={
-                    "Km":           st.column_config.NumberColumn("Km",          format="%d"),
+                    "lap":          st.column_config.NumberColumn("Lap",         format="%d"),
                     "Distance (km)":st.column_config.NumberColumn("Distance (km)",format="%.2f"),
                     "Durée (min)":  st.column_config.NumberColumn("Durée (min)", format="%.2f"),
                     "Allure":       st.column_config.TextColumn("Allure"),

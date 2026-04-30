@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import polyline as polyline_lib
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, TOKEN_FILE, get_auth_url, exchange_code
+from strava_client import StravaClient, TOKEN_FILE, get_auth_url, exchange_code, map_zoom
 from llm_client import OllamaClient
 
 # ---------------------------------------------------------------------------
@@ -337,18 +337,27 @@ if stats:
 # ---------------------------------------------------------------------------
 st.subheader("🏆 Meilleures performances estimées")
 
+_RIEGEL_EXPONENT = 1.06
+_RACE_TARGETS = [
+    ("5 km",      5.0,     "🥇"),
+    ("10 km",    10.0,     "🥈"),
+    ("Semi",     21.0975,  "🥉"),
+    ("Marathon", 42.195,   "🏅"),
+]
+
 
 @st.cache_data(ttl=3600)
 def _riegel_estimates(runs: pd.DataFrame) -> list[dict]:
     valid = runs[(runs["avgPace_sec"] > 0) & (runs["distance_km"] >= 1.0)]
     if valid.empty:
         return []
-    targets = [("5 km", 5.0, "🥇"), ("10 km", 10.0, "🥈"), ("Semi", 21.0975, "🥉"), ("Marathon", 42.195, "🏅")]
     d1 = valid["distance_km"].to_numpy()
     t1 = valid["avgPace_sec"].to_numpy() * d1
     results = []
-    for label, target_km, icon in targets:
-        best_sec = float((t1 * (target_km / d1) ** 1.06).min())
+    for label, target_km, icon in _RACE_TARGETS:
+        best_sec = float((t1 * (target_km / d1) ** _RIEGEL_EXPONENT).min())
+        if not np.isfinite(best_sec) or best_sec <= 0:
+            continue
         h, rem = divmod(int(best_sec), 3600)
         m, s = divmod(rem, 60)
         results.append({
@@ -396,10 +405,7 @@ def _render_last_activity_map(details_data: dict) -> None:
         return
     lats = [c[0] for c in coords]
     lons = [c[1] for c in coords]
-    center_lat = (min(lats) + max(lats)) / 2
-    center_lon = (min(lons) + max(lons)) / 2
-    max_range = max(max(lats) - min(lats), max(lons) - min(lons))
-    zoom = 15 if max_range < 0.01 else 13 if max_range < 0.05 else 12 if max_range < 0.15 else 11 if max_range < 0.4 else 10
+    center_lat, center_lon, zoom = map_zoom(lats, lons)
 
     fig = go.Figure()
     fig.add_trace(go.Scattermap(

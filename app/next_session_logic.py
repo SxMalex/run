@@ -12,6 +12,11 @@ _JOURS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Diman
 _MOIS_FR = ["jan.", "fév.", "mars", "avr.", "mai", "juin",
             "juil.", "août", "sept.", "oct.", "nov.", "déc."]
 
+# Seuil de pace de référence pour le calcul TSB : percentile utilisé sur les
+# sorties longues pour estimer la FC threshold ; 330 s/km (~5:30/km) si absent.
+_TSB_THRESHOLD_PERCENTILE = 0.15
+_DEFAULT_THRESHOLD_PACE_SEC = 330
+
 SESSION_TYPES = {
     "recuperation": {
         "label": "Récupération active",
@@ -121,7 +126,11 @@ def compute_tsb(running_df: pd.DataFrame) -> tuple[float, float, float]:
         return 0.0, 0.0, 0.0
 
     long_runs = runs[runs["distance_km"] >= 8]
-    threshold_sec = int(long_runs["avgPace_sec"].quantile(0.15)) if not long_runs.empty else 330
+    threshold_sec = (
+        int(long_runs["avgPace_sec"].quantile(_TSB_THRESHOLD_PERCENTILE))
+        if not long_runs.empty
+        else _DEFAULT_THRESHOLD_PACE_SEC
+    )
 
     runs["duration_h"] = runs["duration_min"] / 60
     runs["IF"] = (threshold_sec / runs["avgPace_sec"]).clip(upper=1.5)
@@ -208,6 +217,9 @@ def parse_ors_route(geojson: dict) -> dict | None:
         coords = feature["geometry"]["coordinates"]
         summary = feature["properties"]["summary"]
         ascent = feature["properties"].get("ascent", 0) or 0
+
+        if not coords:
+            return None
 
         lats = [c[1] for c in coords]
         lons = [c[0] for c in coords]
