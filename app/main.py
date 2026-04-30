@@ -18,7 +18,7 @@ from strava_client import StravaClient, TOKEN_FILE, get_auth_url, exchange_code,
 # Configuration de la page
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="🏃 Running Dashboard",
+    page_title="Running Dashboard",
     page_icon="🏃",
     layout="wide",
     initial_sidebar_state="expanded",
