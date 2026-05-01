@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, _seconds_to_pace_str, map_zoom
+from strava_client import StravaClient, _seconds_to_pace_str, map_zoom, safe_load_activities
 from next_session_logic import (
     SESSION_TYPES,
     compute_tsb as _compute_tsb,
@@ -69,12 +69,7 @@ def get_strava_client() -> StravaClient:
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
 def load_activities(limit: int = 200) -> tuple[pd.DataFrame, str | None]:
-    client = get_strava_client()
-    try:
-        df = client.get_activities(limit=limit)
-        return df, None
-    except Exception as e:
-        return pd.DataFrame(), str(e)
+    return safe_load_activities(get_strava_client(), limit)
 
 
 def _get_recent_starts(running_df: pd.DataFrame, n: int = 10) -> pd.DataFrame:

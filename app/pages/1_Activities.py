@@ -9,7 +9,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
 
-from strava_client import StravaClient
+from strava_client import StravaClient, safe_load_activities
 from ui_helpers import render_activity_map
 
 # ---------------------------------------------------------------------------
@@ -48,12 +48,7 @@ def get_strava_client() -> StravaClient:
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
 def load_activities(limit: int = 100) -> tuple[pd.DataFrame, str | None]:
-    client = get_strava_client()
-    try:
-        df = client.get_activities(limit=limit)
-        return df, None
-    except Exception as e:
-        return pd.DataFrame(), str(e)
+    return safe_load_activities(get_strava_client(), limit)
 
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des détails...")

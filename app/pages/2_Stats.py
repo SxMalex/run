@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, workout_type_label
+from strava_client import StravaClient, safe_load_activities, workout_type_label
 from stats_tabs import tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite, tab_charge
 
 
@@ -27,12 +27,7 @@ def get_strava_client() -> StravaClient:
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des statistiques...")
 def load_data(limit: int = 200) -> tuple[pd.DataFrame, str | None]:
-    client = get_strava_client()
-    try:
-        df = client.get_activities(limit=limit)
-        return df, None
-    except Exception as e:
-        return pd.DataFrame(), str(e)
+    return safe_load_activities(get_strava_client(), limit)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)

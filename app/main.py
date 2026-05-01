@@ -5,13 +5,18 @@ Affiche les métriques clés de la semaine/mois et les dernières activités.
 
 import os
 import numpy as np
-import requests as _requests
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, TOKEN_FILE, get_auth_url, exchange_code
+from strava_client import (
+    StravaClient,
+    TOKEN_FILE,
+    exchange_code,
+    get_auth_url,
+    safe_load_activities,
+)
 from ui_helpers import render_activity_map
 
 # ---------------------------------------------------------------------------
@@ -142,30 +147,8 @@ def load_athlete_zones() -> list:
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités Strava...")
 def load_activities(limit: int = 100) -> tuple[pd.DataFrame, str | None]:
-    """
-    Charge les activités depuis Strava (avec cache Streamlit 1h).
-    Retourne (DataFrame, message_erreur).
-    """
-    client = get_strava_client()
-    try:
-        df = client.get_activities(limit=limit)
-        return df, None
-    except _requests.HTTPError as e:
-        status = e.response.status_code
-        if status >= 500:
-            return pd.DataFrame(), (
-                f"Les serveurs Strava sont temporairement indisponibles (erreur {status}). "
-                "Réessaie dans quelques instants."
-            )
-        if status == 401:
-            return pd.DataFrame(), "Token expiré ou révoqué. Reconnecte-toi à Strava."
-        if status == 429:
-            return pd.DataFrame(), "Limite de requêtes Strava atteinte. Réessaie dans 15 minutes."
-        return pd.DataFrame(), f"Erreur Strava ({status})"
-    except ValueError as e:
-        return pd.DataFrame(), str(e)
-    except Exception as e:
-        return pd.DataFrame(), f"Erreur de connexion Strava : {e}"
+    """Charge les activités depuis Strava (avec cache Streamlit 1h)."""
+    return safe_load_activities(get_strava_client(), limit)
 
 
 # ---------------------------------------------------------------------------

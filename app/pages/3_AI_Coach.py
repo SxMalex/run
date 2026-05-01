@@ -3,10 +3,12 @@ Page IA Coach — Génère des prompts prêts à copier dans n'importe quel LLM.
 Aucune dépendance Ollama — compatible Streamlit Community Cloud.
 """
 
+import html
+
 import streamlit as st
 import pandas as pd
 
-from strava_client import StravaClient, _seconds_to_pace_str
+from strava_client import StravaClient, _seconds_to_pace_str, safe_load_activities
 
 st.set_page_config(
     page_title="IA Coach — Running Dashboard",
@@ -138,11 +140,7 @@ def get_strava_client() -> StravaClient:
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
 def load_activities(limit: int = 50) -> tuple[pd.DataFrame, str | None]:
-    try:
-        df = get_strava_client().get_activities(limit=limit)
-        return df, None
-    except Exception as e:
-        return pd.DataFrame(), str(e)
+    return safe_load_activities(get_strava_client(), limit)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +190,12 @@ if not running_only.empty:
 context = _format_activities_summary(df, n=nb_activites)
 
 with st.expander("📋 Données incluses dans le prompt", expanded=False):
-    st.markdown(f'<div class="summary-block">{context}</div>', unsafe_allow_html=True)
+    # Échappement HTML : les noms d'activités Strava sont contrôlés par
+    # l'utilisateur et pourraient contenir des balises (XSS si rendu brut).
+    st.markdown(
+        f'<div class="summary-block">{html.escape(context)}</div>',
+        unsafe_allow_html=True,
+    )
 
 st.divider()
 

@@ -10,8 +10,9 @@ import pytest
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import requests
 import strava_client as sc
 from strava_client import (
     _speed_to_pace,
@@ -23,6 +24,7 @@ from strava_client import (
     _extract_splits_metric,
     _cache_get,
     _cache_set,
+    safe_load_activities,
     workout_type_label,
     StravaClient,
 )
@@ -723,3 +725,136 @@ class TestEnsureConnectedContract:
              patch.object(self.client, "_ensure_connected") as mock_connect:
             self.client.get_activity_details(99)
         mock_connect.assert_not_called()
+
+
+# ===========================================================================
+# StravaClient._get retry behaviour
+# ===========================================================================
+
+class TestGetRetry:
+    """Le retry sur 5xx doit relancer une seule fois et propager le résultat final."""
+
+    def setup_method(self):
+        self.client = StravaClient()
+        self.client._access_token = "tok"
+        self.client._connected = True
+
+    def _resp(self, status: int, json_body=None):
+        r = MagicMock()
+        r.status_code = status
+        r.json.return_value = json_body if json_body is not None else {}
+        if status >= 400:
+            r.raise_for_status.side_effect = requests.HTTPError(response=r)
+        else:
+            r.raise_for_status.return_value = None
+        return r
+
+    def test_success_first_try_no_retry(self):
+        ok = self._resp(200, {"k": 1})
+        with patch("strava_client.requests.get", return_value=ok) as mget, \
+             patch("strava_client.time.sleep"):
+            result = self.client._get("athlete")
+        assert result == {"k": 1}
+        assert mget.call_count == 1
+
+    def test_5xx_then_success(self):
+        with patch(
+            "strava_client.requests.get",
+            side_effect=[self._resp(503), self._resp(200, {"k": 2})],
+        ) as mget, patch("strava_client.time.sleep") as msleep:
+            result = self.client._get("athlete")
+        assert result == {"k": 2}
+        assert mget.call_count == 2
+        msleep.assert_called_once_with(2)
+
+    def test_5xx_twice_raises(self):
+        with patch(
+            "strava_client.requests.get",
+            side_effect=[self._resp(502), self._resp(503)],
+        ), patch("strava_client.time.sleep"):
+            with pytest.raises(requests.HTTPError):
+                self.client._get("athlete")
+
+    def test_4xx_no_retry(self):
+        with patch(
+            "strava_client.requests.get", return_value=self._resp(401)
+        ) as mget, patch("strava_client.time.sleep") as msleep:
+            with pytest.raises(requests.HTTPError):
+                self.client._get("athlete")
+        assert mget.call_count == 1
+        msleep.assert_not_called()
+
+
+# ===========================================================================
+# safe_load_activities
+# ===========================================================================
+
+class TestSafeLoadActivities:
+    """Le wrapper traduit les exceptions Strava en messages utilisateur."""
+
+    def setup_method(self):
+        self.client = StravaClient()
+
+    def _http_error(self, status: int) -> requests.HTTPError:
+        resp = MagicMock()
+        resp.status_code = status
+        return requests.HTTPError(response=resp)
+
+    def test_success_returns_dataframe_no_error(self, sample_running_df):
+        with patch.object(self.client, "get_activities", return_value=sample_running_df):
+            df, err = safe_load_activities(self.client, 50)
+        assert err is None
+        assert not df.empty
+
+    def test_401_returns_token_message(self):
+        with patch.object(self.client, "get_activities", side_effect=self._http_error(401)):
+            df, err = safe_load_activities(self.client, 50)
+        assert df.empty
+        assert "Token" in err
+
+    def test_429_returns_rate_limit_message(self):
+        with patch.object(self.client, "get_activities", side_effect=self._http_error(429)):
+            df, err = safe_load_activities(self.client, 50)
+        assert "Limite" in err
+
+    def test_503_returns_server_message(self):
+        with patch.object(self.client, "get_activities", side_effect=self._http_error(503)):
+            df, err = safe_load_activities(self.client, 50)
+        assert "503" in err
+        assert "indisponibles" in err
+
+    def test_other_http_status(self):
+        with patch.object(self.client, "get_activities", side_effect=self._http_error(418)):
+            df, err = safe_load_activities(self.client, 50)
+        assert "418" in err
+
+    def test_value_error_propagated(self):
+        with patch.object(
+            self.client, "get_activities", side_effect=ValueError("Tokens Strava non trouvés.")
+        ):
+            df, err = safe_load_activities(self.client, 50)
+        assert err == "Tokens Strava non trouvés."
+
+    def test_network_error(self):
+        with patch.object(
+            self.client,
+            "get_activities",
+            side_effect=requests.ConnectionError("name resolution"),
+        ):
+            df, err = safe_load_activities(self.client, 50)
+        assert "réseau" in err.lower()
+
+    def test_unexpected_exception_caught(self):
+        with patch.object(self.client, "get_activities", side_effect=RuntimeError("boom")):
+            df, err = safe_load_activities(self.client, 50)
+        assert df.empty
+        assert "inattendue" in err.lower()
+
+    def test_http_error_without_response_attr(self):
+        # Cas dégradé : e.response est None → status code = 0
+        err_obj = requests.HTTPError()
+        err_obj.response = None
+        with patch.object(self.client, "get_activities", side_effect=err_obj):
+            df, err = safe_load_activities(self.client, 50)
+        assert df.empty
+        assert err is not None

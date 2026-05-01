@@ -197,18 +197,17 @@ class StravaClient:
         """Effectue un GET authentifié vers l'API Strava, avec 1 retry sur erreur 5xx."""
         self._ensure_connected()
         headers = {"Authorization": f"Bearer {self._access_token}"}
-        for attempt in range(2):
-            resp = requests.get(
-                f"{STRAVA_API_BASE}/{endpoint}",
-                headers=headers,
-                params=params or {},
-                timeout=30,
-            )
-            if resp.status_code < 500 or attempt == 1:
-                resp.raise_for_status()
-                return resp.json()
+        url = f"{STRAVA_API_BASE}/{endpoint}"
+
+        # Tour 0 : si 5xx → on retente après 2 s. Tour 1 : on laisse remonter quoi qu'il arrive.
+        resp = requests.get(url, headers=headers, params=params or {}, timeout=30)
+        if resp.status_code >= 500:
             logger.warning("Strava 5xx (%s) sur %s, retry dans 2s…", resp.status_code, endpoint)
             time.sleep(2)
+            resp = requests.get(url, headers=headers, params=params or {}, timeout=30)
+
+        resp.raise_for_status()
+        return resp.json()
 
     # ------------------------------------------------------------------
     # Récupération des activités
@@ -632,6 +631,42 @@ class StravaClient:
             if f != TOKEN_FILE:
                 f.unlink(missing_ok=True)
         logger.info("Cache invalidé.")
+
+
+# ---------------------------------------------------------------------------
+# Wrapper d'erreur partagé pour les pages Streamlit
+# ---------------------------------------------------------------------------
+
+def safe_load_activities(
+    client: StravaClient, limit: int
+) -> tuple[pd.DataFrame, str | None]:
+    """
+    Encapsule `client.get_activities(limit)` avec des messages d'erreur lisibles.
+    Retourne (DataFrame, message). `message` est None en cas de succès.
+    """
+    try:
+        df = client.get_activities(limit=limit)
+        return df, None
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", 0) or 0
+        if status == 401:
+            return pd.DataFrame(), "Token expiré ou révoqué. Reconnecte-toi à Strava."
+        if status == 429:
+            return pd.DataFrame(), "Limite de requêtes Strava atteinte. Réessaie dans 15 minutes."
+        if status >= 500:
+            return pd.DataFrame(), (
+                f"Les serveurs Strava sont temporairement indisponibles (erreur {status}). "
+                "Réessaie dans quelques instants."
+            )
+        return pd.DataFrame(), f"Erreur Strava ({status})"
+    except ValueError as e:
+        # Token absent / illisible / config manquante (levé par connect()).
+        return pd.DataFrame(), str(e)
+    except requests.RequestException as e:
+        return pd.DataFrame(), f"Erreur réseau Strava : {e}"
+    except Exception as e:
+        logger.exception("Erreur inattendue dans safe_load_activities")
+        return pd.DataFrame(), f"Erreur inattendue : {e}"
 
 
 # ---------------------------------------------------------------------------
