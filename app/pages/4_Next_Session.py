@@ -20,6 +20,7 @@ from next_session_logic import (
     parse_ors_route as _parse_ors_route,
     build_gpx as _build_gpx,
 )
+from ui_helpers import require_token
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -29,6 +30,8 @@ st.set_page_config(
     page_icon="🗺️",
     layout="wide",
 )
+
+require_token()
 
 ORS_API_BASE = "https://api.openrouteservice.org/v2"
 

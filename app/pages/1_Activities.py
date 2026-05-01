@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
 
 from strava_client import StravaClient, safe_load_activities
-from ui_helpers import render_activity_map
+from ui_helpers import render_activity_map, require_token
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -20,6 +20,8 @@ st.set_page_config(
     page_icon="📋",
     layout="wide",
 )
+
+require_token()
 
 st.markdown("""
 <style>

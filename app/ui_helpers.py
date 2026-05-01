@@ -4,7 +4,24 @@ import plotly.graph_objects as go
 import polyline as polyline_lib
 import streamlit as st
 
-from strava_client import map_zoom
+from strava_client import TOKEN_FILE, map_zoom
+
+
+def require_token() -> None:
+    """
+    Garde à appeler en haut des sous-pages : si l'utilisateur n'a pas
+    de token Strava, on affiche un message + un lien vers l'accueil
+    (où vit le flux OAuth) et on arrête le rendu de la page courante.
+    """
+    if TOKEN_FILE.exists():
+        return
+    st.title("🔒 Connexion requise")
+    st.warning(
+        "Tu dois d'abord connecter ton compte Strava pour accéder à cette page.",
+        icon="🔑",
+    )
+    st.page_link("main.py", label="Aller à la page de connexion", icon="🏠")
+    st.stop()
 
 
 def render_activity_map(details_data: dict, height: int = 420) -> None:

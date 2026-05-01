@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from strava_client import StravaClient, safe_load_activities, workout_type_label
 from stats_tabs import tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite, tab_charge
+from ui_helpers import require_token
 
 
 st.set_page_config(
@@ -16,6 +17,8 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+
+require_token()
 
 # ---------------------------------------------------------------------------
 # Clients & données

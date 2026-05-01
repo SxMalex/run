@@ -6,6 +6,24 @@ from datetime import datetime
 from next_session_logic import compute_pmc_series
 
 
+# La PMC est rejouée à chaque mouvement du slider d'allure seuil.
+# On hashe le DataFrame sur (longueur, date max) — la donnée ne change qu'au
+# refresh Strava, donc cette signature est stable et bien plus rapide qu'un
+# hash complet du DataFrame.
+@st.cache_data(
+    ttl=3600,
+    show_spinner=False,
+    hash_funcs={
+        pd.DataFrame: lambda df: (
+            len(df),
+            str(df["startTimeLocal"].max()) if len(df) else "",
+        )
+    },
+)
+def _cached_pmc_series(running_df: pd.DataFrame, threshold_sec: int) -> pd.DataFrame:
+    return compute_pmc_series(running_df, threshold_sec)
+
+
 def render(running_df: pd.DataFrame, cutoff: datetime) -> None:
     st.subheader("Charge d'entraînement — CTL / ATL / TSB")
     st.caption(
@@ -44,7 +62,7 @@ def render(running_df: pd.DataFrame, cutoff: datetime) -> None:
             "Elle calibre l'Intensity Factor : IF = allure_seuil / allure_moy."
         )
 
-    pmc = compute_pmc_series(running_df, threshold_pace_sec)
+    pmc = _cached_pmc_series(running_df, threshold_pace_sec)
     if pmc.empty:
         st.info("Pas de données de course disponibles.")
         return

@@ -9,12 +9,15 @@ import streamlit as st
 import pandas as pd
 
 from strava_client import StravaClient, _seconds_to_pace_str, safe_load_activities
+from ui_helpers import require_token
 
 st.set_page_config(
     page_title="IA Coach — Running Dashboard",
     page_icon="🤖",
     layout="wide",
 )
+
+require_token()
 
 st.markdown("""
 <style>

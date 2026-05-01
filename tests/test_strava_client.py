@@ -858,3 +858,145 @@ class TestSafeLoadActivities:
             df, err = safe_load_activities(self.client, 50)
         assert df.empty
         assert err is not None
+
+
+# ===========================================================================
+# StravaClient._refresh_token
+# ===========================================================================
+
+class TestRefreshToken:
+    """Le rafraîchissement écrit le nouveau token sur disque, perms 0o600."""
+
+    def setup_method(self):
+        self.client = StravaClient()
+        self.client.client_id = "id"
+        self.client.client_secret = "secret"
+
+    def _redirect_token_file(self, monkeypatch, tmp_path):
+        token_file = tmp_path / "strava_token.json"
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        monkeypatch.setattr(sc, "TOKEN_FILE", token_file)
+        return token_file
+
+    def test_persists_new_token(self, tmp_path, monkeypatch):
+        token_file = self._redirect_token_file(monkeypatch, tmp_path)
+        new_token = {
+            "access_token": "fresh",
+            "refresh_token": "rot",
+            "expires_at": int(time.time()) + 21600,
+        }
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = new_token
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("strava_client.requests.post", return_value=mock_resp):
+            result = self.client._refresh_token("old_refresh")
+
+        assert result == new_token
+        assert token_file.exists()
+        assert json.loads(token_file.read_text()) == new_token
+
+    def test_post_called_with_grant_refresh(self, tmp_path, monkeypatch):
+        self._redirect_token_file(monkeypatch, tmp_path)
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {"access_token": "x", "refresh_token": "y", "expires_at": 0}
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("strava_client.requests.post", return_value=mock_resp) as mpost:
+            self.client._refresh_token("old_rt")
+
+        assert mpost.call_count == 1
+        kwargs = mpost.call_args.kwargs
+        assert kwargs["data"]["grant_type"] == "refresh_token"
+        assert kwargs["data"]["refresh_token"] == "old_rt"
+        assert kwargs["data"]["client_id"] == "id"
+
+    def test_missing_credentials_raises(self):
+        self.client.client_id = ""
+        with pytest.raises(ValueError, match="STRAVA_CLIENT_ID"):
+            self.client._refresh_token("old")
+
+    def test_http_error_propagated(self, tmp_path, monkeypatch):
+        self._redirect_token_file(monkeypatch, tmp_path)
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = requests.HTTPError("400 Bad Request")
+        with patch("strava_client.requests.post", return_value=mock_resp):
+            with pytest.raises(requests.HTTPError):
+                self.client._refresh_token("old")
+
+
+# ===========================================================================
+# StravaClient.connect
+# ===========================================================================
+
+class TestConnect:
+    def setup_method(self):
+        self.client = StravaClient()
+        self.client.client_id = "id"
+        self.client.client_secret = "secret"
+
+    def _set_token_path(self, monkeypatch, tmp_path) -> "Path":
+        token_file = tmp_path / "strava_token.json"
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        monkeypatch.setattr(sc, "TOKEN_FILE", token_file)
+        return token_file
+
+    def test_no_token_file_raises_value_error(self, tmp_path, monkeypatch):
+        self._set_token_path(monkeypatch, tmp_path)
+        with pytest.raises(ValueError, match="non trouvés"):
+            self.client.connect()
+
+    def test_corrupt_token_raises_value_error(self, tmp_path, monkeypatch):
+        token_file = self._set_token_path(monkeypatch, tmp_path)
+        token_file.write_text("not json")
+        with pytest.raises(ValueError, match="Impossible de lire"):
+            self.client.connect()
+
+    def test_fresh_token_does_not_refresh(self, tmp_path, monkeypatch):
+        token_file = self._set_token_path(monkeypatch, tmp_path)
+        token_file.write_text(json.dumps({
+            "access_token": "current",
+            "refresh_token": "rot",
+            "expires_at": int(time.time()) + 3600,
+        }))
+        with patch.object(self.client, "_refresh_token") as mock_refresh:
+            self.client.connect()
+        mock_refresh.assert_not_called()
+        assert self.client._access_token == "current"
+        assert self.client._connected is True
+
+    def test_expired_token_triggers_refresh(self, tmp_path, monkeypatch):
+        token_file = self._set_token_path(monkeypatch, tmp_path)
+        token_file.write_text(json.dumps({
+            "access_token": "stale",
+            "refresh_token": "rot",
+            "expires_at": int(time.time()) - 100,
+        }))
+        new_token = {
+            "access_token": "fresh",
+            "refresh_token": "rot2",
+            "expires_at": int(time.time()) + 21600,
+        }
+        with patch.object(self.client, "_refresh_token", return_value=new_token) as mock_refresh:
+            self.client.connect()
+        mock_refresh.assert_called_once_with("rot")
+        assert self.client._access_token == "fresh"
+
+    def test_token_within_5min_window_triggers_refresh(self, tmp_path, monkeypatch):
+        # La fenêtre de refresh est expires_at - 300s ; un token expirant
+        # dans 60 s doit donc déjà déclencher un refresh.
+        token_file = self._set_token_path(monkeypatch, tmp_path)
+        token_file.write_text(json.dumps({
+            "access_token": "soon_stale",
+            "refresh_token": "rot",
+            "expires_at": int(time.time()) + 60,
+        }))
+        new_token = {
+            "access_token": "fresh",
+            "refresh_token": "rot2",
+            "expires_at": int(time.time()) + 21600,
+        }
+        with patch.object(self.client, "_refresh_token", return_value=new_token) as mock_refresh:
+            self.client.connect()
+        mock_refresh.assert_called_once()
+        assert self.client._access_token == "fresh"
