@@ -8,9 +8,9 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
-import polyline as polyline_lib
 
-from strava_client import StravaClient, map_zoom
+from strava_client import StravaClient
+from ui_helpers import render_activity_map
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -44,62 +44,6 @@ st.markdown("""
 @st.cache_resource
 def get_strava_client() -> StravaClient:
     return StravaClient()
-
-
-def _render_map(details_data: dict) -> None:
-    """
-    Décode le polyline Strava et affiche le tracé GPS avec Plotly + OpenStreetMap.
-    Ne fait rien si l'activité n'a pas de données GPS (tapis, indoor...).
-    """
-    map_data = details_data.get("details", {}).get("map", {})
-    encoded = map_data.get("polyline") or map_data.get("summary_polyline")
-    if not encoded:
-        return
-
-    coords = polyline_lib.decode(encoded)
-    if not coords:
-        return
-
-    lats = [c[0] for c in coords]
-    lons = [c[1] for c in coords]
-
-    center_lat, center_lon, zoom = map_zoom(lats, lons)
-
-    fig = go.Figure()
-
-    # Tracé de la route
-    fig.add_trace(go.Scattermap(
-        lat=lats,
-        lon=lons,
-        mode="lines",
-        line=dict(width=4, color="#fc4c02"),  # orange Strava
-        hoverinfo="none",
-        name="Tracé",
-    ))
-
-    # Marqueurs départ / arrivée
-    fig.add_trace(go.Scattermap(
-        lat=[lats[0], lats[-1]],
-        lon=[lons[0], lons[-1]],
-        mode="markers",
-        marker=dict(size=14, color=["#22c55e", "#ef4444"]),
-        text=["Départ", "Arrivée"],
-        hoverinfo="text",
-        name="Points clés",
-    ))
-
-    fig.update_layout(
-        map=dict(
-            style="open-street-map",
-            center=dict(lat=center_lat, lon=center_lon),
-            zoom=zoom,
-        ),
-        height=420,
-        margin=dict(l=0, r=0, t=0, b=0),
-        showlegend=False,
-    )
-
-    st.plotly_chart(fig)
 
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
@@ -501,7 +445,7 @@ if selected_event.selection.rows:
 
     # Carte GPS
     if details:
-        _render_map(details)
+        render_activity_map(details, height=420)
 
     # Graphiques détaillés (streams)
     streams = load_streams(activity_id)

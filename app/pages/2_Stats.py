@@ -11,11 +11,6 @@ from strava_client import StravaClient, workout_type_label
 from stats_tabs import tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite, tab_charge
 
 
-def _add_trend_line(fig, x, y, ascending_better=False):
-    from stats_tabs._shared import add_trend_line
-    return add_trend_line(fig, x, y, ascending_better)
-
-
 st.set_page_config(
     page_title="Statistiques — Running Dashboard",
     page_icon="📊",

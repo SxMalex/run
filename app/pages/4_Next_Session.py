@@ -85,43 +85,6 @@ def _get_recent_starts(running_df: pd.DataFrame, n: int = 10) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Appel ORS
-# ---------------------------------------------------------------------------
-
-def fetch_ors_route(lat: float, lon: float, distance_m: int, seed: int, api_key: str) -> dict | None:
-    """Appelle l'API OpenRouteService pour générer une boucle inédite."""
-    url = f"{ORS_API_BASE}/directions/foot-running/geojson"
-    headers = {
-        "Authorization": api_key,
-        "Content-Type": "application/json",
-        "Accept": "application/json, application/geo+json",
-    }
-    body = {
-        "coordinates": [[lon, lat]],
-        "options": {
-            "round_trip": {
-                "length": distance_m,
-                "points": 3,
-                "seed": seed,
-            }
-        },
-        "elevation": True,
-        "instructions": False,
-    }
-    try:
-        resp = requests.post(url, json=body, headers=headers, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.HTTPError as e:
-        st.error(f"Erreur ORS ({e.response.status_code}) : {e.response.text[:300]}")
-        return None
-    except Exception as e:
-        st.error(f"Erreur réseau : {e}")
-        return None
-
-
-
-# ---------------------------------------------------------------------------
 # Rendu carte
 # ---------------------------------------------------------------------------
 

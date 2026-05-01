@@ -9,10 +9,10 @@ import requests as _requests
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import polyline as polyline_lib
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, TOKEN_FILE, get_auth_url, exchange_code, map_zoom
+from strava_client import StravaClient, TOKEN_FILE, get_auth_url, exchange_code
+from ui_helpers import render_activity_map
 
 # ---------------------------------------------------------------------------
 # Configuration de la page
@@ -186,7 +186,6 @@ with st.sidebar:
         get_strava_client().invalidate_cache()
         st.cache_data.clear()
         st.cache_resource.clear()
-        st.session_state.activities_df = None
         st.rerun()
 
     st.divider()
@@ -358,35 +357,6 @@ def load_last_activity_streams(activity_id: int) -> dict:
     return get_strava_client().get_streams(activity_id)
 
 
-def _render_last_activity_map(details_data: dict) -> None:
-    map_data = details_data.get("details", {}).get("map", {})
-    encoded = map_data.get("polyline") or map_data.get("summary_polyline")
-    if not encoded:
-        return
-    coords = polyline_lib.decode(encoded)
-    if not coords:
-        return
-    lats = [c[0] for c in coords]
-    lons = [c[1] for c in coords]
-    center_lat, center_lon, zoom = map_zoom(lats, lons)
-
-    fig = go.Figure()
-    fig.add_trace(go.Scattermap(
-        lat=lats, lon=lons, mode="lines",
-        line=dict(width=4, color="#fc4c02"), hoverinfo="none",
-    ))
-    fig.add_trace(go.Scattermap(
-        lat=[lats[0], lats[-1]], lon=[lons[0], lons[-1]],
-        mode="markers", marker=dict(size=14, color=["#22c55e", "#ef4444"]),
-        text=["Départ", "Arrivée"], hoverinfo="text",
-    ))
-    fig.update_layout(
-        map=dict(style="open-street-map", center=dict(lat=center_lat, lon=center_lon), zoom=zoom),
-        height=300, margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
-    )
-    st.plotly_chart(fig)
-
-
 def _render_elevation_profile(streams: dict) -> None:
     alts = streams.get("altitude", [])
     dists = streams.get("distance", [])
@@ -486,7 +456,7 @@ if not running_df.empty:
         col_map, col_pace = st.columns([3, 2])
 
         with col_map:
-            _render_last_activity_map(details)
+            render_activity_map(details, height=300)
 
         with col_pace:
             st.caption("Allure par km")

@@ -117,20 +117,24 @@ def format_date_fr(d: date) -> str:
     return f"{_JOURS_FR[d.weekday()]} {d.day} {_MOIS_FR[d.month - 1]}"
 
 
-def compute_tsb(running_df: pd.DataFrame) -> tuple[float, float, float]:
-    """Retourne (CTL, ATL, TSB) actuels à partir des activités de course."""
+def compute_pmc_series(running_df: pd.DataFrame, threshold_sec: float) -> pd.DataFrame:
+    """
+    Calcule la série quotidienne du modèle Performance Management Chart.
+    Retourne un DataFrame avec colonnes : date, tss, ctl, atl, tsb.
+
+    Conventions :
+    - `ctl` et `atl` sont les valeurs en fin de journée (après TSS du jour),
+    - `tsb` est la fraîcheur en début de journée (avant TSS du jour) — ce qui
+      reflète l'état du coureur au moment où il commence sa séance.
+
+    Retourne un DataFrame vide si pas de données exploitables.
+    """
+    empty = pd.DataFrame(columns=["date", "tss", "ctl", "atl", "tsb"])
     if running_df.empty or "avgPace_sec" not in running_df.columns:
-        return 0.0, 0.0, 0.0
+        return empty
     runs = running_df[running_df["avgPace_sec"] > 0].copy()
     if runs.empty:
-        return 0.0, 0.0, 0.0
-
-    long_runs = runs[runs["distance_km"] >= 8]
-    threshold_sec = (
-        int(long_runs["avgPace_sec"].quantile(_TSB_THRESHOLD_PERCENTILE))
-        if not long_runs.empty
-        else _DEFAULT_THRESHOLD_PACE_SEC
-    )
+        return empty
 
     runs["duration_h"] = runs["duration_min"] / 60
     runs["IF"] = (threshold_sec / runs["avgPace_sec"]).clip(upper=1.5)
@@ -146,10 +150,37 @@ def compute_tsb(running_df: pd.DataFrame) -> tuple[float, float, float]:
     k_ctl = np.exp(-1 / 42)
     k_atl = np.exp(-1 / 7)
     ctl_v = atl_v = 0.0
-    for tss in daily_full:
+    records = []
+    for d, tss in daily_full.items():
+        tsb_v = ctl_v - atl_v
         ctl_v = ctl_v * k_ctl + tss * (1 - k_ctl)
         atl_v = atl_v * k_atl + tss * (1 - k_atl)
+        records.append({"date": d, "tss": tss, "ctl": ctl_v, "atl": atl_v, "tsb": tsb_v})
 
+    return pd.DataFrame(records)
+
+
+def compute_tsb(running_df: pd.DataFrame) -> tuple[float, float, float]:
+    """Retourne (CTL, ATL, TSB) actuels à partir des activités de course."""
+    if running_df.empty or "avgPace_sec" not in running_df.columns:
+        return 0.0, 0.0, 0.0
+    runs = running_df[running_df["avgPace_sec"] > 0]
+    if runs.empty:
+        return 0.0, 0.0, 0.0
+
+    long_runs = runs[runs["distance_km"] >= 8]
+    threshold_sec = (
+        int(long_runs["avgPace_sec"].quantile(_TSB_THRESHOLD_PERCENTILE))
+        if not long_runs.empty
+        else _DEFAULT_THRESHOLD_PACE_SEC
+    )
+
+    pmc = compute_pmc_series(running_df, threshold_sec)
+    if pmc.empty:
+        return 0.0, 0.0, 0.0
+    last = pmc.iloc[-1]
+    ctl_v = float(last["ctl"])
+    atl_v = float(last["atl"])
     return round(ctl_v, 1), round(atl_v, 1), round(ctl_v - atl_v, 1)
 
 

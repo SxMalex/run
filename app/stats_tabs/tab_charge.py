@@ -1,8 +1,9 @@
-import numpy as np
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
+
+from next_session_logic import compute_pmc_series
 
 
 def render(running_df: pd.DataFrame, cutoff: datetime) -> None:
@@ -43,33 +44,11 @@ def render(running_df: pd.DataFrame, cutoff: datetime) -> None:
             "Elle calibre l'Intensity Factor : IF = allure_seuil / allure_moy."
         )
 
-    runs = running_df[running_df["avgPace_sec"] > 0].copy()
-    if runs.empty:
+    pmc = compute_pmc_series(running_df, threshold_pace_sec)
+    if pmc.empty:
         st.info("Pas de données de course disponibles.")
         return
 
-    runs["duration_h"] = runs["duration_min"] / 60
-    runs["IF"]  = (threshold_pace_sec / runs["avgPace_sec"]).clip(upper=1.5)
-    runs["tss"] = (runs["duration_h"] * runs["IF"] ** 2 * 100).clip(upper=400)
-    runs["day"] = runs["startTimeLocal"].dt.normalize()
-
-    daily_tss  = runs.groupby("day")["tss"].sum()
-    today_ts   = pd.Timestamp(datetime.now().date())
-    full_range = pd.date_range(daily_tss.index.min(), today_ts, freq="D")
-    daily_full = pd.Series(0.0, index=full_range)
-    daily_full.update(daily_tss)
-
-    k_ctl = np.exp(-1 / 42)
-    k_atl = np.exp(-1 / 7)
-    ctl_v = atl_v = 0.0
-    records = []
-    for d, tss in daily_full.items():
-        tsb_v  = ctl_v - atl_v
-        ctl_v  = ctl_v * k_ctl + tss * (1 - k_ctl)
-        atl_v  = atl_v * k_atl + tss * (1 - k_atl)
-        records.append({"date": d, "tss": tss, "ctl": ctl_v, "atl": atl_v, "tsb": tsb_v})
-
-    pmc      = pd.DataFrame(records)
     pmc_view = pmc[pmc["date"] >= pd.Timestamp(cutoff)].copy()
 
     last    = pmc.iloc[-1]
