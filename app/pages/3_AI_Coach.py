@@ -65,15 +65,6 @@ Analyse ces données et donne-moi :
 5. Une note de motivation personnalisée\
 """
 
-_SUGGESTIONS = [
-    ("🎯 Objectif semi", "Comment me préparer pour un semi-marathon dans 2 mois ?"),
-    ("😴 Récupération", "Est-ce que je me repose suffisamment entre mes sorties ?"),
-    ("📈 Allure 10 km", "Comment puis-je améliorer mon allure sur 10 km ?"),
-    ("❤️ Fréquence cardiaque", "Mon profil de fréquence cardiaque est-il bon pour mon niveau ?"),
-    ("🌿 Endurance", "Comment développer mon endurance fondamentale ?"),
-    ("⚡ Vitesse", "Quel type de séance de vitesse me conseilles-tu ?"),
-]
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -162,7 +153,7 @@ with st.sidebar:
     st.markdown("## ⚙️ Paramètres")
     nb_activites = st.slider(
         "Activités à inclure",
-        min_value=5, max_value=20, value=10,
+        min_value=5, max_value=50, value=10,
         help="Nombre de sorties récentes incluses dans le prompt",
     )
     st.divider()
@@ -189,7 +180,6 @@ if not running_only.empty:
     hr_vals = recent["avgHR"].dropna()
     c4.metric("FC moyenne", f"{hr_vals.mean():.0f} bpm" if not hr_vals.empty else "—")
 
-# Contexte partagé entre les deux sections
 context = _format_activities_summary(df, n=nb_activites)
 
 with st.expander("📋 Données incluses dans le prompt", expanded=False):
@@ -203,69 +193,20 @@ with st.expander("📋 Données incluses dans le prompt", expanded=False):
 st.divider()
 
 # ---------------------------------------------------------------------------
-# Onglets via radio (survie au rerun des boutons suggestion)
+# Prompt d'analyse complet — copier-coller dans n'importe quel LLM
 # ---------------------------------------------------------------------------
-_TABS = ["🏃 Analyse complète", "💬 Question personnalisée"]
-if "coach_active_tab" not in st.session_state:
-    st.session_state["coach_active_tab"] = _TABS[0]
-
-active_tab = st.radio(
-    "Onglet",
-    _TABS,
-    key="coach_active_tab",
-    horizontal=True,
-    label_visibility="collapsed",
+st.subheader("Prompt prêt à copier")
+st.info(
+    "Ce prompt embarque ton contexte (rôle de coach + tes données récentes) et "
+    "une demande d'analyse par défaut. Une fois collé dans ton LLM, tu peux "
+    "remplacer la question par la tienne pour creuser un point spécifique."
 )
 
-# ---------------------------------------------------------------------------
-# Onglet 1 — Analyse complète
-# ---------------------------------------------------------------------------
-if active_tab == _TABS[0]:
-    st.subheader("Prompt d'analyse automatique")
-    st.info(
-        "Ce prompt demande au LLM une analyse complète de votre entraînement récent : "
-        "charge, points forts, points d'amélioration et recommandations pour la semaine."
-    )
-    prompt = _build_prompt(context, _ANALYSIS_REQUEST)
-    st.code(prompt, language="markdown")
-    st.download_button(
-        "⬇️ Télécharger le prompt (.txt)",
-        data=prompt,
-        file_name="coach_analyse.txt",
-        mime="text/plain",
-    )
-
-# ---------------------------------------------------------------------------
-# Onglet 2 — Question personnalisée
-# ---------------------------------------------------------------------------
-else:
-    st.subheader("Prompt pour une question personnalisée")
-
-    st.markdown("**Suggestions :**")
-    sug_cols = st.columns(3)
-    for i, (label, question) in enumerate(_SUGGESTIONS):
-        if sug_cols[i % 3].button(label, key=f"sug_{i}", width='stretch', help=question):
-            st.session_state["coach_question"] = question
-
-    if "coach_question" not in st.session_state:
-        st.session_state["coach_question"] = ""
-
-    st.text_area(
-        "Votre question",
-        key="coach_question",
-        placeholder="Ex : Comment améliorer ma cadence ? Suis-je prêt pour un marathon ?",
-        height=90,
-    )
-
-    question = st.session_state["coach_question"].strip()
-    if question:
-        prompt = _build_prompt(context, f"Ma question : {question}")
-        st.code(prompt, language="markdown")
-        st.download_button(
-            "⬇️ Télécharger le prompt (.txt)",
-            data=prompt,
-            file_name="coach_question.txt",
-            mime="text/plain",
-        )
-    else:
-        st.caption("Sélectionnez une suggestion ou tapez votre question pour générer le prompt.")
+prompt = _build_prompt(context, _ANALYSIS_REQUEST)
+st.code(prompt, language="markdown")
+st.download_button(
+    "⬇️ Télécharger le prompt (.txt)",
+    data=prompt,
+    file_name="coach_analyse.txt",
+    mime="text/plain",
+)
