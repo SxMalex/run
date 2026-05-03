@@ -1,17 +1,20 @@
 # 🏃 Running Dashboard
 
-Tableau de bord personnel pour l'analyse de vos données de course à pied.
+Tableau de bord pour l'analyse de vos données de course à pied.
 Se connecte à **Strava** via son API officielle, génère des **parcours inédits** via OpenRouteService,
-et offre des conseils personnalisés grâce à une **IA locale** (Ollama) — **100% gratuit, 100% local**.
+et produit des **prompts d'analyse IA** prêts à coller dans Claude, ChatGPT ou Gemini.
+
+Multi-utilisateur (token OAuth en session, jamais persisté), conçu pour tourner aussi bien en local
+qu'en production derrière un reverse-proxy HTTPS.
 
 ---
 
 ## Fonctionnalités
 
 - **Accueil** — métriques clés semaine/mois, dernière activité détaillée (carte + splits), estimations de performance Riegel
-- **Activités** — liste filtrée par date, type et distance ; détail complet avec graphique des splits
+- **Activités** — liste filtrée par date, type et distance ; détail complet avec graphique des splits et streams Garmin-style (altitude / allure / FC)
 - **Statistiques** — 6 onglets : volume, allure, FC, cadence, régularité, charge d'entraînement (CTL/ATL/TSB)
-- **IA Coach** — analyse personnalisée en streaming, questions libres à votre coach IA local
+- **IA Coach** — génère un prompt prêt à coller dans n'importe quel LLM (Claude, ChatGPT, Gemini…) avec votre contexte d'entraînement
 - **Prochaine sortie** — recommandation de séance basée sur la forme actuelle + parcours en boucle généré sur OpenStreetMap + export GPX pour Garmin
 
 ---
@@ -25,13 +28,11 @@ et offre des conseils personnalisés grâce à une **IA locale** (Ollama) — **
 | Compte Strava | — | [strava.com](https://www.strava.com) |
 | Clé API OpenRouteService | — | [openrouteservice.org](https://openrouteservice.org/dev/#/signup) *(gratuit, optionnel)* |
 
-> **Note :** Ollama est inclus dans Docker Compose, aucune installation supplémentaire n'est nécessaire.
-
 ---
 
-## Installation et démarrage
+## Démarrage rapide (dev local)
 
-### 1. Cloner ou télécharger le projet
+### 1. Cloner le projet
 
 ```bash
 git clone <url-du-repo> running-dashboard
@@ -57,46 +58,73 @@ cp .env.example .env
 STRAVA_CLIENT_ID=votre_client_id
 STRAVA_CLIENT_SECRET=votre_client_secret
 STRAVA_REDIRECT_URI=http://localhost:8501
-OLLAMA_HOST=http://ollama:11434
-OLLAMA_MODEL=llama3.2
 CACHE_TTL=3600
 
-# Optionnel — améliore le calcul des calories (défaut : 70 kg)
-ATHLETE_WEIGHT_KG=70
-
-# Optionnel — nécessaire uniquement pour la page Prochaine sortie
+# Optionnel — page Prochaine sortie
 ORS_API_KEY=votre_cle_ors
 ```
 
 > ⚠️ **Sécurité :** le fichier `.env` ne doit jamais être versionné (il est dans `.gitignore`).
 
-### 4. Démarrer les conteneurs
+### 4. Démarrer
 
 ```bash
 docker compose up -d
 ```
 
-Cela démarre :
-- **app** — le tableau de bord Streamlit sur le port `8501`
-- **ollama** — le serveur de modèles LLM sur le port `11434`
+Cela lance Streamlit sur le port `8501` avec hot-reload (un changement dans `app/*.py` est rechargé sans redémarrer le container).
 
 ### 5. Connecter votre compte Strava
 
-Ouvrez **[http://localhost:8501](http://localhost:8501)** dans votre navigateur.
+Ouvrez **[http://localhost:8501](http://localhost:8501)**, cliquez sur **"🔗 Connecter à Strava"**, autorisez l'application, et vous arrivez sur le tableau de bord.
 
-La page de connexion s'affiche automatiquement si vous n'êtes pas encore authentifié.
-Cliquez sur **"🔗 Connecter à Strava"**, autorisez l'application, et vous serez redirigé
-vers le tableau de bord.
+Le token OAuth vit dans la session du navigateur (`st.session_state`). Il est rafraîchi automatiquement tant que la session est ouverte. À la fermeture de l'onglet, une nouvelle connexion est demandée — instantanée puisque Strava se souvient de l'autorisation.
 
-Cette étape n'est à faire **qu'une seule fois** — le token est sauvegardé et se rafraîchit automatiquement.
+---
 
-### 6. Télécharger le modèle IA (première fois)
+## Déploiement en production
 
-Le modèle LLM doit être téléchargé une seule fois (environ 2 Go pour `llama3.2`) :
+Pour exposer l'app publiquement avec HTTPS, un service Caddy en frontal est fourni.
+
+### 1. Préparer le DNS et les variables
+
+- Pointer ton domaine (`running.exemple.com`) vers l'IP de ton serveur.
+- Ouvrir les ports `80` et `443` sur le firewall.
+- Compléter `.env` avec :
+
+```dotenv
+PUBLIC_DOMAIN=running.exemple.com
+ACME_EMAIL=admin@exemple.com
+STRAVA_REDIRECT_URI=https://running.exemple.com/
+```
+
+- Mettre à jour l'**Authorization Callback Domain** côté Strava sur `running.exemple.com`.
+
+### 2. Démarrer la stack prod
 
 ```bash
-./scripts/pull_model.sh
+docker compose -f docker-compose.prod.yml up -d --build
 ```
+
+Caddy obtient automatiquement un certificat Let's Encrypt au premier démarrage. Le port `8501` n'est plus exposé : tout passe par HTTPS via Caddy.
+
+### 3. Mettre à jour le code
+
+```bash
+git pull
+docker compose -f docker-compose.prod.yml build app
+docker compose -f docker-compose.prod.yml up -d
+```
+
+L'image prod n'utilise pas de bind mount — un rebuild est nécessaire pour propager les changements.
+
+### Sécurité incluse
+
+- **HTTPS auto** via Let's Encrypt (renouvellement géré par Caddy).
+- **Headers** : HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, CSP `frame-ancestors 'none'`.
+- **Healthcheck actif** : si Streamlit crashe, Caddy renvoie 502 immédiatement au lieu de proxifier dans le vide.
+- **XSRF + CORS** activés côté Streamlit.
+- **Token OAuth jamais persisté sur disque** — il vit uniquement dans la session navigateur.
 
 ---
 
@@ -104,91 +132,72 @@ Le modèle LLM doit être téléchargé une seule fois (environ 2 Go pour `llama
 
 ### 🏠 Accueil (`/`)
 
-- **Métriques clés** : km cette semaine, km ce mois, nombre de sorties, allure moyenne, FC moyenne
-- **Estimations de performance** : temps prédits sur 5km, 10km, semi-marathon et marathon via la formule de Riegel, calculés sur vos meilleures sorties récentes
-- **Dernière activité** : carte du tracé GPS, splits kilomètre par kilomètre avec code couleur, 8 métriques clés
-
----
+- Métriques clés : km cette semaine, km ce mois, nombre de sorties, allure moyenne, FC moyenne
+- Estimations de performance : temps prédits sur 5 km, 10 km, semi et marathon via la formule de Riegel, calculés sur vos meilleures sorties récentes
+- Dernière activité : carte du tracé GPS, splits kilomètre par kilomètre avec code couleur, 8 métriques clés
 
 ### 📋 Activités (`/Activities`)
 
-Liste complète de vos sorties avec des **filtres** :
+Liste complète de vos sorties avec filtres (type, dates, distance, recherche par nom). Cliquez sur une ligne pour les détails :
 
-- **Type d'activité** : course, vélo, natation, marche, etc.
-- **Plage de dates** : du/au (sélecteurs calendrier)
-- **Distance** : curseur de filtre min/max
-- **Recherche par nom** : texte libre
-
-**Cliquez sur une ligne** pour afficher les détails complets :
 - Métriques (distance, durée, allure, FC, cadence, D+, calories, FC max)
-- **Graphique des splits** kilomètre par kilomètre avec code couleur (vert = plus rapide que la moyenne)
+- Carte GPS du tracé
+- Streams haute-résolution Garmin-style : altitude avec pente, allure lissée, FC avec bandes de zones
 - Tableau des splits avec toutes les métriques par kilomètre
-
----
 
 ### 📊 Statistiques (`/Stats`)
 
 Six onglets d'analyse :
 
-**📦 Volume** — histogrammes hebdomadaires et mensuels, distribution des distances
-
-**🐇 Allure** — évolution temporelle avec tendance, allure par tranche de distance
-
-**❤️ Fréquence cardiaque** — évolution FC, zones Z1-Z5, corrélation FC/allure
-
-**🦶 Cadence** — évolution avec zone optimale (170-180 spm), distribution
-
-**📅 Régularité** — calendrier heatmap des sorties, streaks, jours de repos
-
-**⚡ Charge d'entraînement** — CTL (forme chronique 42j), ATL (fatigue aiguë 7j), TSB (fraîcheur), graphique historique de la forme
-
----
+- **📦 Volume** — histogrammes hebdomadaires et mensuels, distribution des distances
+- **🐇 Allure** — évolution temporelle avec tendance, splits km par km moyennés
+- **❤️ Fréquence cardiaque** — évolution FC, zones Z1-Z5, corrélation FC/allure
+- **🦶 Cadence** — évolution avec zone optimale (170-180 spm), distribution
+- **📅 Régularité** — calendrier heatmap des sorties, streaks, jours de repos
+- **⚡ Charge d'entraînement** — CTL (forme chronique 42 j), ATL (fatigue aiguë 7 j), TSB (fraîcheur), graphique historique
 
 ### 🤖 IA Coach (`/AI_Coach`)
 
-1. Cliquez sur **"🤖 Analyser mon entraînement"** — l'IA génère une analyse en streaming
-2. Utilisez les **boutons de suggestions** ou posez votre propre question
-3. Choisissez le modèle LLM et le nombre de sorties analysées dans la barre latérale
+Génère un prompt complet (system prompt + contexte d'entraînement + demande d'analyse) prêt à être collé dans **Claude**, **ChatGPT**, **Gemini** ou n'importe quel autre LLM. L'application **ne fait aucun appel à un LLM elle-même** : vos données restent sur votre machine, et vous gardez la main sur le LLM utilisé.
 
-> 💡 **Confidentialité :** toutes les données restent sur votre machine. Aucune donnée n'est envoyée à un service externe.
-
----
+Réglez le nombre de sorties incluses dans la barre latérale (5 à 50), copiez le prompt, collez-le où vous voulez.
 
 ### 🗺️ Prochaine sortie (`/Next_Session`)
 
-Génère une recommandation de séance et un parcours inédit basés sur votre forme actuelle :
+Recommandation de séance et parcours inédit basés sur votre forme actuelle :
 
-1. **Recommandation automatique** : calcul CTL/ATL/TSB → sélection du type de séance (récupération, endurance, tempo ou sortie longue)
+1. **Recommandation** : calcul CTL/ATL/TSB → sélection du type de séance (récupération, endurance, tempo ou sortie longue)
 2. **Objectifs** : distance cible, allure cible avec fourchette ±4%, dénivelé, durée estimée
 3. **Parcours en boucle** : généré via OpenRouteService autour d'un de vos points de départ habituels
-4. **Carte interactive** et **profil altimétrique**
+4. **Carte interactive** + **profil altimétrique**
 5. **Export GPX** compatible Garmin Connect
 
-> Nécessite une clé API OpenRouteService (gratuite, inscription sur [openrouteservice.org](https://openrouteservice.org/dev/#/signup)).
+> Nécessite une clé API OpenRouteService (gratuite, inscription sur [openrouteservice.org](https://openrouteservice.org/dev/#/signup)). La clé peut être globale via `ORS_API_KEY` dans `.env`, ou saisie par chaque utilisateur dans la sidebar.
 
 ---
 
 ## Commandes utiles
 
 ```bash
-# Démarrer tous les services
-docker compose up -d
+# ── Dev ──────────────────────────────────────────────────────────────
+docker compose up -d                # démarrer
+docker compose down                 # arrêter
+docker compose logs -f              # logs temps réel
+docker compose build app            # reconstruire après changement Dockerfile
+docker compose exec app rm -rf /app/.cache   # vider tout le cache disque
 
-# Arrêter tous les services
-docker compose down
+# ── Prod ─────────────────────────────────────────────────────────────
+docker compose -f docker-compose.prod.yml up -d --build   # déployer
+docker compose -f docker-compose.prod.yml logs -f caddy   # logs Caddy
+docker compose -f docker-compose.prod.yml logs -f app     # logs app
+docker compose -f docker-compose.prod.yml restart app     # redémarrer l'app
 
-# Voir les logs en temps réel
-docker compose logs -f
-
-# Reconstruire l'image après modification du code
-docker compose build app && docker compose up -d app
-
-# Vider le cache disque (toutes athlètes confondus)
-docker compose exec app rm -rf /app/.cache
-
-# Se déconnecter : utiliser le bouton « Déconnexion » dans la barre latérale
-# (le token vit en st.session_state, plus sur disque)
+# ── Backup des certificats Let's Encrypt (prod) ──────────────────────
+docker run --rm -v running_caddy_data:/data -v $(pwd):/backup alpine \
+    tar czf /backup/caddy-certs.tgz /data
 ```
+
+Pour se déconnecter d'un compte Strava : utiliser le bouton **« Déconnexion »** dans la barre latérale (le token n'est nulle part sur disque).
 
 ---
 
@@ -200,37 +209,11 @@ docker compose exec app rm -rf /app/.cache
 |---|---|---|
 | `STRAVA_CLIENT_ID` | — | Client ID de l'application Strava |
 | `STRAVA_CLIENT_SECRET` | — | Client Secret de l'application Strava |
-| `STRAVA_REDIRECT_URI` | `http://localhost:8501` | URL de redirection OAuth |
-| `OLLAMA_HOST` | `http://ollama:11434` | URL du serveur Ollama |
-| `OLLAMA_MODEL` | `llama3.2` | Modèle LLM à utiliser |
-| `CACHE_TTL` | `3600` | Durée du cache en secondes |
-| `ATHLETE_WEIGHT_KG` | `70` | Poids de l'athlète pour le calcul des calories |
+| `STRAVA_REDIRECT_URI` | `http://localhost:8501` | URL de redirection OAuth — doit matcher l'Authorization Callback Domain Strava |
+| `CACHE_TTL` | `3600` | Durée du cache disque en secondes |
 | `ORS_API_KEY` | — | Clé API OpenRouteService (page Prochaine sortie) |
-
-### Modèles Ollama recommandés
-
-| Modèle | RAM nécessaire | Qualité | Vitesse |
-|---|---|---|---|
-| `llama3.2:1b` | ~1 Go | ★★☆ | ★★★ |
-| `llama3.2` | ~2 Go | ★★★ | ★★☆ |
-| `mistral` | ~4 Go | ★★★ | ★★☆ |
-| `llama3.1:8b` | ~5 Go | ★★★ | ★☆☆ |
-
-### Utiliser un GPU
-
-Pour accélérer Ollama avec un GPU NVIDIA, ajoutez dans `docker-compose.yml` :
-
-```yaml
-ollama:
-  image: ollama/ollama
-  deploy:
-    resources:
-      reservations:
-        devices:
-          - driver: nvidia
-            count: 1
-            capabilities: [gpu]
-```
+| `PUBLIC_DOMAIN` | — | *(prod uniquement)* Domaine servi par Caddy |
+| `ACME_EMAIL` | — | *(prod uniquement)* Email pour les notifications Let's Encrypt |
 
 ---
 
@@ -238,30 +221,32 @@ ollama:
 
 ```
 run/
-├── docker-compose.yml          # Orchestration Docker (dev)
-├── docker-compose.prod.yml     # Stack prod : Caddy + Streamlit
+├── docker-compose.yml          # Stack dev (Streamlit avec hot-reload)
+├── docker-compose.prod.yml     # Stack prod (Caddy + Streamlit, image figée)
 ├── Caddyfile                   # Reverse-proxy HTTPS + headers de sécurité
 ├── .env.example                # Template de configuration
 ├── pytest.ini                  # Configuration des tests (pythonpath = app)
 ├── README.md                   # Ce fichier
-├── scripts/
-│   └── pull_model.sh           # Téléchargement du modèle Ollama
+├── CLAUDE.md                   # Instructions projet pour assistants IA
 ├── tests/
-│   ├── conftest.py             # Fixtures et stubs partagés
-│   ├── test_strava_client.py   # Tests des fonctions utilitaires Strava
-│   └── test_next_session.py    # Tests de la logique de recommandation
+│   ├── conftest.py             # Fixtures pytest et stubs Streamlit/Plotly
+│   ├── test_strava_client.py   # Client Strava, cache, OAuth refresh
+│   └── test_next_session.py    # Logique TSB / recommandation / GPX
 └── app/
-    ├── Dockerfile              # Image Docker de l'application
+    ├── Dockerfile              # Image Docker (Python 3.12-slim, user non-root)
+    ├── docker-entrypoint.sh    # Init du dossier .cache au démarrage
     ├── requirements.txt        # Dépendances Python
-    ├── main.py                 # Page d'accueil Streamlit
+    ├── main.py                 # Page d'accueil + flux OAuth Strava
     ├── strava_client.py        # Client API Strava + cache + transformations
-    ├── llm_client.py           # Client Ollama (IA Coach)
-    ├── next_session_logic.py   # Logique métier pure : TSB, recommandation, GPX
+    ├── next_session_logic.py   # Logique pure : TSB, recommandation, GPX
+    ├── ui_helpers.py           # require_token(), get_strava_client(), carte
+    ├── stats_tabs/             # 6 onglets de la page Statistiques
+    ├── .streamlit/config.toml  # XSRF/CORS, headless server
     └── pages/
         ├── 1_Activities.py     # Liste et détails des activités
-        ├── 2_Stats.py          # Graphiques statistiques (6 onglets)
-        ├── 3_AI_Coach.py       # Coach IA avec streaming
-        └── 4_Next_Session.py   # Prochaine sortie + parcours ORS
+        ├── 2_Stats.py          # Graphiques statistiques
+        ├── 3_AI_Coach.py       # Prompts LLM prêts à copier
+        └── 4_Next_Session.py   # Recommandation + parcours ORS
 ```
 
 ---
@@ -269,16 +254,17 @@ run/
 ## Tests
 
 ```bash
-# Lancer la suite de tests (94 tests)
-pytest
+# Lancer la suite (200 tests)
+python3 -m pytest tests/ -v
 
-# Avec couverture de code
-pytest --cov=app --cov-report=term-missing
+# Avec couverture (nécessite pytest-cov)
+python3 -m pytest tests/ --cov=app --cov-report=term-missing
 ```
 
-Les tests couvrent les fonctions pures sans dépendance à Streamlit :
-- `strava_client.py` — utilitaires (allure, calories, cadence, normalisation) et méthodes DataFrame
-- `next_session_logic.py` — calcul TSB, recommandation de séance, parsing ORS, génération GPX (**99% de couverture**)
+Les tests couvrent les fonctions pures sans dépendance à Streamlit ou à l'API Strava :
+
+- `strava_client.py` — utilitaires (allure, calories, cadence, normalisation), méthodes DataFrame, cache disque cloisonné par athlète, refresh OAuth, retry sur 5xx, traduction d'erreurs HTTP
+- `next_session_logic.py` — calcul TSB, recommandation de séance, parsing ORS, génération GPX
 
 ---
 
@@ -292,15 +278,8 @@ docker compose logs app
 
 **Erreur de connexion Strava**
 - Vérifiez `STRAVA_CLIENT_ID` et `STRAVA_CLIENT_SECRET` dans `.env`
-- Assurez-vous que l'**Authorization Callback Domain** est bien `localhost` dans les paramètres de votre app Strava
+- Assurez-vous que l'**Authorization Callback Domain** correspond au domaine de `STRAVA_REDIRECT_URI` (ex. `localhost` pour le dev, `running.exemple.com` pour la prod)
 - Cliquez sur "🔄 Reconnecter à Strava" dans le tableau de bord
-
-**L'IA ne répond pas**
-```bash
-docker compose logs ollama
-# Vérifiez que le modèle est téléchargé
-docker compose exec ollama ollama list
-```
 
 **Pas de données affichées**
 - Cliquez sur "🔄 Actualiser les données" dans la barre latérale
@@ -308,7 +287,12 @@ docker compose exec ollama ollama list
 
 **La page Prochaine sortie ne génère pas de parcours**
 - Vérifiez que `ORS_API_KEY` est définie dans `.env` ou saisie dans la barre latérale
-- Le profil utilisé est `foot-walking` (compatible running)
+- Le profil utilisé est `foot-walking` (compatible running) ou `foot-hiking` pour les sentiers
+
+**Prod : Caddy ne récupère pas de certificat**
+- Vérifiez que les ports 80 et 443 sont ouverts et atteignables depuis Internet
+- Vérifiez que le DNS pointe bien sur le serveur (`dig +short ${PUBLIC_DOMAIN}`)
+- Logs Caddy : `docker compose -f docker-compose.prod.yml logs caddy`
 
 ---
 
@@ -316,92 +300,63 @@ docker compose exec ollama ollama list
 
 ### Vue d'ensemble
 
-Le projet est une application **mono-utilisateur 100% locale** : aucune donnée ne quitte votre machine (hormis les appels API Strava et ORS). Deux services tournent en parallèle via Docker Compose.
-
 ```
-Navigateur
-    │
-    ▼
-[Streamlit :8501]  ←→  [API Strava]
-    │                  [API ORS]
-    ▼
-[Ollama :11434]  (LLM local)
+                  ┌─── dev ─────┐         ┌─── prod ────────────┐
+                  │             │         │                     │
+   Navigateur ──→ │  Streamlit  │   ou    │  Caddy (HTTPS) ──→  │ ──→ Streamlit
+                  │   :8501     │         │   :443              │      :8501
+                  └─────────────┘         └─────────────────────┘
+                         │
+                         ▼
+                  API Strava (REST)
+                  API OpenRouteService (REST)
 ```
 
----
+L'app est **stateless** : aucune base de données. Les seules données persistées sur disque sont le cache des appels API Strava (`app/.cache/{athlete_id}/`), purgeable à tout moment.
 
-### Technologies
+### Multi-user
 
-**Interface — Streamlit**
+- **Token OAuth** : vit dans `st.session_state` côté navigateur. Per-session, jamais sur disque. Rafraîchi automatiquement par un callback dans la session.
+- **Cache disque** cloisonné par athlète : chaque utilisateur a son sous-dossier `app/.cache/{athlete_id}/`.
+- **Cache mémoire Streamlit** (`@st.cache_data`) : isolé par `athlete_id` via les arguments de fonction.
+- **Pas de singleton `StravaClient`** : un client est construit per-session depuis le token courant.
 
-Streamlit transforme du code Python en application web sans HTML/JS. Chaque interaction déclenche une réexécution complète du script (modèle stateless). Le projet l'utilise en **multi-pages** : chaque fichier dans `pages/` devient automatiquement un onglet de navigation.
-
-**Données — Pandas + Plotly**
-
-- **Pandas** gère toutes les données sous forme de `DataFrame`. Toutes les agrégations (stats semaine/mois, filtres, zones FC, CTL/ATL/TSB) se font via ses opérateurs vectorisés.
-- **Plotly** génère les graphiques interactifs (zoom, hover) directement depuis les DataFrames.
-
-**API — Strava OAuth 2.0**
-
-L'accès aux données passe par l'API REST officielle Strava avec le flux OAuth 2.0 :
-- **Access token** : valide 6h, utilisé dans chaque requête HTTP
-- **Refresh token** : permanent, permet de regénérer un access token automatiquement
-- Les tokens vivent dans `st.session_state` côté navigateur — per-session, jamais persistés sur disque (multi-user safe)
-- Le cache disque des données API est cloisonné par `athlete_id` dans `app/.cache/{athlete_id}/`
-
-**Parcours — OpenRouteService**
-
-L'API ORS génère des boucles de course en `foot-walking` autour d'un point GPS de départ, avec dénivelé réel via MNT. Chaque variante est reproductible via un paramètre `seed`.
-
-**IA — Ollama**
-
-Ollama est un serveur local qui fait tourner des LLMs (llama3.2, mistral...). Le projet lui envoie des requêtes HTTP en **streaming** : les tokens arrivent un par un et Streamlit les affiche au fil de l'eau.
-
-**Infrastructure — Docker Compose**
-
-Deux conteneurs orchestrés :
-- `app` : image Python 3.12-slim avec Streamlit
-- `ollama` : image officielle Ollama avec les modèles stockés dans un volume persistant
-
----
-
-### Patterns utilisés
-
-**Cache à deux niveaux**
+### Cache à deux niveaux
 
 ```
 Requête données
       │
       ▼
-@st.cache_data (RAM, durée de session Streamlit)
+@st.cache_data (RAM, isolé par athlete_id, TTL 1h)
       │ miss
       ▼
-_cache_get() (fichier JSON sur disque, TTL 1h)
+_cache_get(athlete_id, key) (fichier JSON sur disque, TTL 1h)
       │ miss
       ▼
-API Strava (réseau)
+API Strava (réseau, 1 retry sur 5xx)
       │
       ▼
-_cache_set() → disque → retour → RAM Streamlit
+_cache_set(athlete_id, key) → disque → retour → RAM Streamlit
 ```
 
-**Séparation des responsabilités**
+### Séparation des responsabilités
 
 | Couche | Fichier(s) | Rôle |
 |---|---|---|
-| Données | `strava_client.py` | Fetch API, cache, transformation en DataFrame |
-| Logique métier | `next_session_logic.py` | Calculs purs, testables sans Streamlit |
-| IA | `llm_client.py` | Appels Ollama, streaming, formatage du contexte |
-| UI | `main.py` + `pages/` | Affichage uniquement, aucune logique métier |
+| Données | `strava_client.py` | Fetch API, cache disque, OAuth, transformations DataFrame |
+| Logique métier | `next_session_logic.py` | Calculs purs (TSB, recommandation, GPX), testables sans Streamlit |
+| UI helpers | `ui_helpers.py` | `require_token()`, `get_strava_client()`, rendu carte commun |
+| UI | `main.py` + `pages/` + `stats_tabs/` | Affichage uniquement, pas de logique métier |
 
-**Calcul de la charge d'entraînement (CTL/ATL/TSB)**
+### Calcul de la charge d'entraînement (CTL/ATL/TSB)
 
 Le TSS (Training Stress Score) de chaque sortie est calculé ainsi :
 ```
-IF = allure_seuil / allure_moyenne   (clampé à 1.5)
+IF  = allure_seuil / allure_moyenne   (clampé à 1.5)
 TSS = durée_heures × IF² × 100
 ```
-CTL et ATL sont des moyennes exponentielles (EWMA) avec des constantes de temps de 42 et 7 jours respectivement. TSB = CTL − ATL.
+
+CTL et ATL sont des moyennes exponentielles (EWMA) avec des constantes de temps de 42 et 7 jours respectivement. **TSB = CTL − ATL**.
 
 ---
 
@@ -410,6 +365,6 @@ CTL et ATL sont des moyennes exponentielles (EWMA) avec des constantes de temps 
 Projet personnel à usage privé. Utilise des bibliothèques open-source :
 [Strava API](https://developers.strava.com),
 [Streamlit](https://streamlit.io),
-[Ollama](https://ollama.ai),
 [OpenRouteService](https://openrouteservice.org),
-[Plotly](https://plotly.com).
+[Plotly](https://plotly.com),
+[Caddy](https://caddyserver.com).
