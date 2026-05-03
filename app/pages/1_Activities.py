@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
 
 from strava_client import safe_load_activities
-from ui_helpers import get_strava_client, render_activity_map, require_token
+from ui_helpers import get_strava_client, render_activity_map, render_strava_attribution, require_token
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -519,3 +519,5 @@ if selected_event.selection.rows:
         st.info("Les données de splits ne sont pas disponibles pour cette activité.")
     else:
         st.info("Impossible de charger les détails de cette activité.")
+
+render_strava_attribution()

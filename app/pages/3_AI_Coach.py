@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 
 from strava_client import _seconds_to_pace_str, safe_load_activities
-from ui_helpers import get_strava_client, require_token
+from ui_helpers import get_strava_client, render_strava_attribution, require_token
 
 st.set_page_config(
     page_title="IA Coach — Running Dashboard",
@@ -208,3 +208,5 @@ st.download_button(
     file_name="coach_analyse.txt",
     mime="text/plain",
 )
+
+render_strava_attribution()

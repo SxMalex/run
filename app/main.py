@@ -15,7 +15,7 @@ from strava_client import (
     get_auth_url,
     safe_load_activities,
 )
-from ui_helpers import get_strava_client, render_activity_map
+from ui_helpers import get_strava_client, render_activity_map, render_strava_attribution
 
 # ---------------------------------------------------------------------------
 # Configuration de la page
@@ -505,12 +505,7 @@ else:
 # Pied de page
 # ---------------------------------------------------------------------------
 st.divider()
-col_l, col_r = st.columns([3, 1])
-with col_l:
-    st.caption(
-        "Données issues de l'API officielle Strava."
-    )
-with col_r:
-    if not running_df.empty:
-        total_km = running_df["distance_km"].sum()
-        st.caption(f"Total chargé : {total_km:.0f} km sur {len(running_df)} sorties")
+if not running_df.empty:
+    total_km = running_df["distance_km"].sum()
+    st.caption(f"Total chargé : {total_km:.0f} km sur {len(running_df)} sorties")
+render_strava_attribution()

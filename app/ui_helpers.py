@@ -48,6 +48,27 @@ def get_strava_client() -> StravaClient:
     )
 
 
+def render_strava_attribution() -> None:
+    """
+    Attribution « Powered by Strava » — à appeler en bas de toute page
+    affichant des données Strava (exigence des Brand Guidelines).
+    Cf. https://developers.strava.com/guidelines/
+    """
+    st.markdown(
+        """
+        <div style="text-align: center; margin: 24px 0 8px 0;">
+            <a href="https://www.strava.com" target="_blank"
+               style="text-decoration: none; color: inherit;">
+                <span style="color: #888; font-size: 0.8rem;">Powered by </span><span
+                      style="color: #FC4C02; font-weight: 700; font-size: 0.85rem;
+                             letter-spacing: 0.04em;">STRAVA</span>
+            </a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_activity_map(details_data: dict, height: int = 420) -> None:
     """
     Décode le polyline Strava et affiche le tracé GPS sur OpenStreetMap.

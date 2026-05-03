@@ -20,7 +20,7 @@ from next_session_logic import (
     parse_ors_route as _parse_ors_route,
     build_gpx as _build_gpx,
 )
-from ui_helpers import get_strava_client, require_token
+from ui_helpers import get_strava_client, render_strava_attribution, require_token
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -435,3 +435,5 @@ if route:
         mime="application/gpx+xml",
         width='stretch',
     )
+
+render_strava_attribution()

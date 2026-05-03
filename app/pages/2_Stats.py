@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from strava_client import safe_load_activities, workout_type_label
 from stats_tabs import tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite, tab_charge
-from ui_helpers import get_strava_client, require_token
+from ui_helpers import get_strava_client, render_strava_attribution, require_token
 
 
 st.set_page_config(
@@ -115,3 +115,5 @@ elif active_tab == "📅 Régularité":
     tab_regularite.render(running_df)
 elif active_tab == "⚡ Charge":
     tab_charge.render(running_df, cutoff)
+
+render_strava_attribution()
