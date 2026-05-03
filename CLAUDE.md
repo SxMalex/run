@@ -85,11 +85,22 @@ Les tests sont dans `tests/`, le `pythonpath` pytest pointe sur `app/` (cf. `pyt
 ## Règles de commit
 
 - **Ne jamais commiter sans demande explicite** de l'utilisateur.
+- **Ne jamais `git add` sans demande explicite** de l'utilisateur — même pour préparer un commit. Laisser à l'utilisateur le contrôle de ce qui entre dans l'index.
 - **Commits conventionnels** obligatoires : `type(scope): message` en minuscules.
   - Types valides : `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `style`
   - Exemples : `fix(stats): correct slider step alignment`, `feat(next-session): add GPX export`
 - **Pas de signature Claude** — ne jamais ajouter `Co-Authored-By: Claude` ni aucune mention de l'IA dans les commits.
 - Message court (< 72 caractères), au présent, en anglais.
+
+## Règles de documentation
+
+- **Mettre à jour le `README.md`** dès qu'une modification technique ou fonctionnelle d'envergure est apportée au projet. Exemples qui déclenchent une mise à jour :
+  - Ajout / suppression d'une page, d'un service Docker, d'une dépendance majeure
+  - Changement du modèle d'authentification, du stockage, du cache
+  - Nouvelles variables d'environnement ou changement de leur sémantique
+  - Ajout d'un mode de déploiement (dev, prod, staging…)
+  - Changement dans la structure de fichiers exposée à l'utilisateur
+- Garder le `README.md` cohérent avec l'état réel du code — pas de section qui décrit une fonctionnalité supprimée.
 
 ## Variables d'environnement (`.env`)
 
