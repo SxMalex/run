@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, _seconds_to_pace_str, map_zoom, safe_load_activities
+from strava_client import _seconds_to_pace_str, map_zoom, safe_load_activities
 from next_session_logic import (
     SESSION_TYPES,
     compute_tsb as _compute_tsb,
@@ -20,7 +20,7 @@ from next_session_logic import (
     parse_ors_route as _parse_ors_route,
     build_gpx as _build_gpx,
 )
-from ui_helpers import require_token
+from ui_helpers import get_strava_client, require_token
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -32,6 +32,8 @@ st.set_page_config(
 )
 
 require_token()
+
+_athlete_id = st.session_state["strava_athlete_id"]
 
 ORS_API_BASE = "https://api.openrouteservice.org/v2"
 
@@ -63,15 +65,10 @@ def _ors_options(session_key: str, prefer_trails: bool, distance_m: int, seed: i
     }
 
 # ---------------------------------------------------------------------------
-# Clients
+# Données
 # ---------------------------------------------------------------------------
-@st.cache_resource
-def get_strava_client() -> StravaClient:
-    return StravaClient()
-
-
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
-def load_activities(limit: int = 200) -> tuple[pd.DataFrame, str | None]:
+def load_activities(athlete_id: int, limit: int = 200) -> tuple[pd.DataFrame, str | None]:
     return safe_load_activities(get_strava_client(), limit)
 
 
@@ -178,7 +175,7 @@ st.title("🗺️ Prochaine sortie")
 st.caption("Parcours inédit généré sur OpenStreetMap, adapté à ta forme actuelle.")
 
 # Chargement
-df, error = load_activities(200)
+df, error = load_activities(_athlete_id, 200)
 if error:
     st.error(f"Erreur Strava : {error}")
     st.stop()
@@ -261,6 +258,7 @@ with st.sidebar:
         sidebar_start_lon = None
 
     if st.button("🔄 Actualiser les données", width='stretch'):
+        get_strava_client().invalidate_cache()
         st.cache_data.clear()
         st.rerun()
 

@@ -8,8 +8,8 @@ import html
 import streamlit as st
 import pandas as pd
 
-from strava_client import StravaClient, _seconds_to_pace_str, safe_load_activities
-from ui_helpers import require_token
+from strava_client import _seconds_to_pace_str, safe_load_activities
+from ui_helpers import get_strava_client, require_token
 
 st.set_page_config(
     page_title="IA Coach — Running Dashboard",
@@ -18,6 +18,8 @@ st.set_page_config(
 )
 
 require_token()
+
+_athlete_id = st.session_state["strava_athlete_id"]
 
 st.markdown("""
 <style>
@@ -125,15 +127,10 @@ def _build_prompt(context: str, question: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Clients & cache
+# Cache
 # ---------------------------------------------------------------------------
-@st.cache_resource
-def get_strava_client() -> StravaClient:
-    return StravaClient()
-
-
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
-def load_activities(limit: int = 50) -> tuple[pd.DataFrame, str | None]:
+def load_activities(athlete_id: int, limit: int = 50) -> tuple[pd.DataFrame, str | None]:
     return safe_load_activities(get_strava_client(), limit)
 
 
@@ -146,7 +143,7 @@ st.caption(
     "ou n'importe quel autre LLM. Vos données Strava sont incluses dans le contexte."
 )
 
-df, error = load_activities(50)
+df, error = load_activities(_athlete_id, 50)
 
 # Sidebar
 with st.sidebar:
@@ -158,6 +155,7 @@ with st.sidebar:
     )
     st.divider()
     if st.button("🔄 Actualiser données", width='stretch'):
+        get_strava_client().invalidate_cache()
         st.cache_data.clear()
         st.rerun()
 

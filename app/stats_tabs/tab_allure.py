@@ -2,18 +2,14 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-from strava_client import StravaClient, _seconds_to_pace_str
+from strava_client import _seconds_to_pace_str
 from stats_tabs._shared import WORKOUT_COLORS, add_trend_line
-
-
-@st.cache_resource
-def _get_client() -> StravaClient:
-    return StravaClient()
+from ui_helpers import get_strava_client
 
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des splits km par km...")
-def _load_splits_data(activity_ids: tuple[int, ...]) -> pd.DataFrame:
-    return _get_client().get_splits_aggregate(list(activity_ids))
+def _load_splits_data(athlete_id: int, activity_ids: tuple[int, ...]) -> pd.DataFrame:
+    return get_strava_client().get_splits_aggregate(list(activity_ids))
 
 
 def render(running_filtered: pd.DataFrame) -> None:
@@ -165,7 +161,8 @@ def render(running_filtered: pd.DataFrame) -> None:
         .tolist()
     )
     if recent_ids:
-        splits_df = _load_splits_data(recent_ids)
+        athlete_id = st.session_state["strava_athlete_id"]
+        splits_df = _load_splits_data(athlete_id, recent_ids)
         if not splits_df.empty:
             splits_clean = splits_df[
                 (splits_df["split"] <= 25)

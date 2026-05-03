@@ -7,9 +7,9 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-from strava_client import StravaClient, safe_load_activities, workout_type_label
+from strava_client import safe_load_activities, workout_type_label
 from stats_tabs import tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite, tab_charge
-from ui_helpers import require_token
+from ui_helpers import get_strava_client, require_token
 
 
 st.set_page_config(
@@ -20,21 +20,19 @@ st.set_page_config(
 
 require_token()
 
-# ---------------------------------------------------------------------------
-# Clients & données
-# ---------------------------------------------------------------------------
-@st.cache_resource
-def get_strava_client() -> StravaClient:
-    return StravaClient()
+_athlete_id = st.session_state["strava_athlete_id"]
 
 
+# ---------------------------------------------------------------------------
+# Données
+# ---------------------------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner="Chargement des statistiques...")
-def load_data(limit: int = 200) -> tuple[pd.DataFrame, str | None]:
+def load_data(athlete_id: int, limit: int = 200) -> tuple[pd.DataFrame, str | None]:
     return safe_load_activities(get_strava_client(), limit)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def load_athlete_zones() -> dict:
+def load_athlete_zones(athlete_id: int) -> dict:
     return get_strava_client().get_athlete_zones()
 
 
@@ -43,7 +41,7 @@ def load_athlete_zones() -> dict:
 # ---------------------------------------------------------------------------
 st.title("📊 Statistiques d'entraînement")
 
-df, error = load_data(200)
+df, error = load_data(_athlete_id, 200)
 if error:
     st.error(f"Erreur Strava : {error}")
     st.stop()
@@ -79,10 +77,9 @@ with st.sidebar:
     if st.button("🔄 Actualiser", width='stretch'):
         get_strava_client().invalidate_cache()
         st.cache_data.clear()
-        st.cache_resource.clear()
         st.rerun()
 
-    zones_data = load_athlete_zones()
+    zones_data = load_athlete_zones(_athlete_id)
     hr_zones_list = (zones_data.get("heart_rate") or {}).get("zones") or []
 
 running_filtered = running_df[running_df["startTimeLocal"] >= cutoff].copy()

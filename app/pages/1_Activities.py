@@ -9,8 +9,8 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, date
 
-from strava_client import StravaClient, safe_load_activities
-from ui_helpers import render_activity_map, require_token
+from strava_client import safe_load_activities
+from ui_helpers import get_strava_client, render_activity_map, require_token
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -22,6 +22,8 @@ st.set_page_config(
 )
 
 require_token()
+
+_athlete_id = st.session_state["strava_athlete_id"]
 
 st.markdown("""
 <style>
@@ -43,26 +45,19 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 # Client Strava (réutilisé depuis le cache Streamlit)
 # ---------------------------------------------------------------------------
-@st.cache_resource
-def get_strava_client() -> StravaClient:
-    return StravaClient()
-
-
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
-def load_activities(limit: int = 100) -> tuple[pd.DataFrame, str | None]:
+def load_activities(athlete_id: int, limit: int = 100) -> tuple[pd.DataFrame, str | None]:
     return safe_load_activities(get_strava_client(), limit)
 
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des détails...")
-def load_activity_details(activity_id: int) -> dict:
-    client = get_strava_client()
-    return client.get_activity_details(activity_id)
+def load_activity_details(athlete_id: int, activity_id: int) -> dict:
+    return get_strava_client().get_activity_details(activity_id)
 
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des streams...")
-def load_streams(activity_id: int) -> dict:
-    client = get_strava_client()
-    return client.get_streams(activity_id)
+def load_streams(athlete_id: int, activity_id: int) -> dict:
+    return get_strava_client().get_streams(activity_id)
 
 
 def _render_streams(streams: dict, max_hr: int = 190) -> None:
@@ -235,7 +230,7 @@ def _render_streams(streams: dict, max_hr: int = 190) -> None:
 # ---------------------------------------------------------------------------
 st.title("📋 Mes Activités")
 
-df, error = load_activities(100)
+df, error = load_activities(_athlete_id, 100)
 
 if error:
     st.error(f"Erreur Strava : {error}")
@@ -438,14 +433,14 @@ if selected_event.selection.rows:
 
     # Chargement des détails et splits
     with st.spinner("Chargement des détails..."):
-        details = load_activity_details(activity_id)
+        details = load_activity_details(_athlete_id, activity_id)
 
     # Carte GPS
     if details:
         render_activity_map(details, height=420)
 
     # Graphiques détaillés (streams)
-    streams = load_streams(activity_id)
+    streams = load_streams(_athlete_id, activity_id)
     if streams:
         st.subheader("📈 Graphiques détaillés")
         max_hr_act = int(selected_row.get("maxHR") or 190)

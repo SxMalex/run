@@ -30,6 +30,24 @@ from strava_client import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_DUMMY_ATHLETE_ID = 42
+
+
+def _make_client(athlete_id: int = _DUMMY_ATHLETE_ID, **token_overrides) -> StravaClient:
+    """Construit un StravaClient pour les tests, avec un token valide en mémoire."""
+    token = {
+        "access_token": "tok",
+        "refresh_token": "rot",
+        "expires_at": int(time.time()) + 3600,
+    }
+    token.update(token_overrides)
+    return StravaClient(token=token, athlete_id=athlete_id)
+
+
 # ===========================================================================
 # _seconds_to_pace_str
 # ===========================================================================
@@ -196,7 +214,7 @@ class TestExtractCadence:
 
 class TestGetWeeklyStats:
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
 
     def test_empty_df(self, empty_df):
         result = self.client.get_weekly_stats(empty_df)
@@ -257,7 +275,7 @@ class TestGetWeeklyStats:
 
 class TestGetMonthlyStats:
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
 
     def test_empty_df(self, empty_df):
         assert self.client.get_monthly_stats(empty_df).empty
@@ -280,7 +298,7 @@ class TestGetMonthlyStats:
 
 class TestGetSummaryMetrics:
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
 
     def test_empty_df_returns_defaults(self, empty_df):
         result = self.client.get_summary_metrics(empty_df)
@@ -326,7 +344,7 @@ class TestGetHrZones:
     ]
 
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
 
     def test_empty_df(self, empty_df):
         assert self.client.get_hr_zones(empty_df, hr_zones=self._ZONES).empty
@@ -486,7 +504,7 @@ class TestExtractSplitsMetric:
 
 class TestSummarizeActivity:
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
 
     def _details(self, **kwargs):
         base = {
@@ -547,7 +565,7 @@ class TestSummarizeActivity:
 
 class TestGetBestEfforts:
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
 
     def _mock_details(self, activity_name, efforts):
         """Construit un faux dict d'activité Strava avec best_efforts."""
@@ -564,14 +582,14 @@ class TestGetBestEfforts:
         """Contexte de mock commun : cache désactivé + connexion bouchonnée."""
         side = {"side_effect": get_side_effect} if get_side_effect else {"return_value": get_return}
         return (
-            patch.object(self.client, "_ensure_connected"),
+            patch.object(self.client, "_ensure_fresh_token"),
             patch.object(self.client, "_get", **side),
             patch("strava_client._cache_get", return_value=None),
             patch("strava_client._cache_set"),
         )
 
     def test_empty_list_returns_empty_dict(self):
-        with patch.object(self.client, "_ensure_connected"), \
+        with patch.object(self.client, "_ensure_fresh_token"), \
              patch("strava_client._cache_get", return_value=None), \
              patch("strava_client._cache_set"):
             result = self.client.get_best_efforts([])
@@ -622,67 +640,89 @@ class TestGetBestEfforts:
 
 class TestCacheTTL:
     KEY = "test_cache_ttl_key"
+    ATHLETE_ID = 42
 
-    def _write_entry(self, cache_dir, key: str, data, timestamp: float) -> None:
+    def _write_entry(self, cache_dir, athlete_id: int, key: str, data, timestamp: float) -> None:
         safe_key = hashlib.md5(key.encode()).hexdigest()
-        (cache_dir / f"{safe_key}.json").write_text(
+        athlete_dir = cache_dir / str(athlete_id)
+        athlete_dir.mkdir(parents=True, exist_ok=True)
+        (athlete_dir / f"{safe_key}.json").write_text(
             json.dumps({"timestamp": timestamp, "data": data})
         )
 
     def test_fresh_data_returned(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
-        _cache_set(self.KEY, {"value": 42})
-        assert _cache_get(self.KEY) == {"value": 42}
+        _cache_set(self.ATHLETE_ID, self.KEY, {"value": 42})
+        assert _cache_get(self.ATHLETE_ID, self.KEY) == {"value": 42}
+
+    def test_isolated_per_athlete(self, monkeypatch, tmp_path):
+        """Deux athlètes ne se voient pas — même clé, données distinctes."""
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        _cache_set(1, self.KEY, {"value": "alice"})
+        _cache_set(2, self.KEY, {"value": "bob"})
+        assert _cache_get(1, self.KEY) == {"value": "alice"}
+        assert _cache_get(2, self.KEY) == {"value": "bob"}
+        # Athlète sans donnée écrite → cache miss
+        assert _cache_get(3, self.KEY) is None
 
     def test_expired_data_returns_none(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
         old_ts = time.time() - sc.CACHE_TTL - 1
-        self._write_entry(tmp_path, self.KEY, {"value": 99}, old_ts)
-        assert _cache_get(self.KEY) is None
+        self._write_entry(tmp_path, self.ATHLETE_ID, self.KEY, {"value": 99}, old_ts)
+        assert _cache_get(self.ATHLETE_ID, self.KEY) is None
 
     def test_expired_file_is_deleted(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
         old_ts = time.time() - sc.CACHE_TTL - 1
-        self._write_entry(tmp_path, self.KEY, {"value": 99}, old_ts)
-        _cache_get(self.KEY)
+        self._write_entry(tmp_path, self.ATHLETE_ID, self.KEY, {"value": 99}, old_ts)
+        _cache_get(self.ATHLETE_ID, self.KEY)
         safe_key = hashlib.md5(self.KEY.encode()).hexdigest()
-        assert not (tmp_path / f"{safe_key}.json").exists()
+        assert not (tmp_path / str(self.ATHLETE_ID) / f"{safe_key}.json").exists()
 
     def test_boundary_at_exact_ttl_is_expired(self, monkeypatch, tmp_path):
         # Condition is strict <, so age == CACHE_TTL → expired.
-        # Setting timestamp to now - CACHE_TTL means any subsequent read
-        # will see age >= CACHE_TTL, which fails the strict < check.
         monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
         boundary_ts = time.time() - sc.CACHE_TTL
-        self._write_entry(tmp_path, self.KEY, {"value": 1}, boundary_ts)
-        assert _cache_get(self.KEY) is None
+        self._write_entry(tmp_path, self.ATHLETE_ID, self.KEY, {"value": 1}, boundary_ts)
+        assert _cache_get(self.ATHLETE_ID, self.KEY) is None
 
     def test_just_before_ttl_is_hit(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
         recent_ts = time.time() - sc.CACHE_TTL + 60  # 60 s before expiry
-        self._write_entry(tmp_path, self.KEY, {"value": 7}, recent_ts)
-        assert _cache_get(self.KEY) == {"value": 7}
+        self._write_entry(tmp_path, self.ATHLETE_ID, self.KEY, {"value": 7}, recent_ts)
+        assert _cache_get(self.ATHLETE_ID, self.KEY) == {"value": 7}
 
     def test_corrupted_json_returns_none(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        athlete_dir = tmp_path / str(self.ATHLETE_ID)
+        athlete_dir.mkdir(parents=True, exist_ok=True)
         safe_key = hashlib.md5(self.KEY.encode()).hexdigest()
-        (tmp_path / f"{safe_key}.json").write_text("not valid json {{")
-        assert _cache_get(self.KEY) is None
+        (athlete_dir / f"{safe_key}.json").write_text("not valid json {{")
+        assert _cache_get(self.ATHLETE_ID, self.KEY) is None
 
     def test_missing_file_returns_none(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
-        assert _cache_get("nonexistent_key_xyz") is None
+        assert _cache_get(self.ATHLETE_ID, "nonexistent_key_xyz") is None
+
+    def test_invalidate_cache_only_affects_one_athlete(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
+        _cache_set(1, "k", {"v": 1})
+        _cache_set(2, "k", {"v": 2})
+        client = _make_client(athlete_id=1)
+        client.invalidate_cache()
+        assert _cache_get(1, "k") is None
+        assert _cache_get(2, "k") == {"v": 2}
 
 
 # ===========================================================================
-# _ensure_connected call contract
+# Cache hit ⇒ pas d'appel API
 # ===========================================================================
 
-class TestEnsureConnectedContract:
-    """_ensure_connected must be called on cache miss and skipped on cache hit."""
+class TestCacheHitSkipsApi:
+    """Sur cache hit, _get n'est jamais appelé (donc pas de refresh non plus)."""
 
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
         self._minimal_details = {
             "distance": 10000.0,
             "moving_time": 3300,
@@ -697,34 +737,32 @@ class TestEnsureConnectedContract:
             "average_watts": None,
         }
 
-    def test_get_streams_calls_ensure_connected_on_miss(self):
+    def test_get_streams_calls_api_on_miss(self):
         with patch("strava_client._cache_get", return_value=None), \
              patch("strava_client._cache_set"), \
-             patch.object(self.client, "_ensure_connected") as mock_connect, \
-             patch.object(self.client, "_get", return_value={"heartrate": {"data": [150]}}):
+             patch.object(self.client, "_get", return_value={"heartrate": {"data": [150]}}) as mock_get:
             self.client.get_streams(42)
-        mock_connect.assert_called_once()
+        mock_get.assert_called_once()
 
-    def test_get_streams_skips_ensure_connected_on_hit(self):
+    def test_get_streams_skips_api_on_hit(self):
         with patch("strava_client._cache_get", return_value={"heartrate": [150]}), \
-             patch.object(self.client, "_ensure_connected") as mock_connect:
+             patch.object(self.client, "_get") as mock_get:
             self.client.get_streams(42)
-        mock_connect.assert_not_called()
+        mock_get.assert_not_called()
 
-    def test_get_activity_details_calls_ensure_connected_on_miss(self):
+    def test_get_activity_details_calls_api_on_miss(self):
         with patch("strava_client._cache_get", return_value=None), \
              patch("strava_client._cache_set"), \
-             patch.object(self.client, "_ensure_connected") as mock_connect, \
-             patch.object(self.client, "_get", side_effect=[self._minimal_details, []]):
+             patch.object(self.client, "_get", side_effect=[self._minimal_details, []]) as mock_get:
             self.client.get_activity_details(99)
-        mock_connect.assert_called_once()
+        assert mock_get.call_count >= 1
 
-    def test_get_activity_details_skips_ensure_connected_on_hit(self):
+    def test_get_activity_details_skips_api_on_hit(self):
         cached = {"details": {}, "splits": [], "splits_metric": [], "summary": {}}
         with patch("strava_client._cache_get", return_value=cached), \
-             patch.object(self.client, "_ensure_connected") as mock_connect:
+             patch.object(self.client, "_get") as mock_get:
             self.client.get_activity_details(99)
-        mock_connect.assert_not_called()
+        mock_get.assert_not_called()
 
 
 # ===========================================================================
@@ -735,9 +773,8 @@ class TestGetRetry:
     """Le retry sur 5xx doit relancer une seule fois et propager le résultat final."""
 
     def setup_method(self):
-        self.client = StravaClient()
-        self.client._access_token = "tok"
-        self.client._connected = True
+        # Token frais — n'a pas besoin d'être rafraîchi pendant ces tests.
+        self.client = _make_client()
 
     def _resp(self, status: int, json_body=None):
         r = MagicMock()
@@ -793,7 +830,7 @@ class TestSafeLoadActivities:
     """Le wrapper traduit les exceptions Strava en messages utilisateur."""
 
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
 
     def _http_error(self, status: int) -> requests.HTTPError:
         resp = MagicMock()
@@ -865,21 +902,14 @@ class TestSafeLoadActivities:
 # ===========================================================================
 
 class TestRefreshToken:
-    """Le rafraîchissement écrit le nouveau token sur disque, perms 0o600."""
+    """Le rafraîchissement appelle Strava et n'écrit RIEN sur disque."""
 
     def setup_method(self):
-        self.client = StravaClient()
+        self.client = _make_client()
         self.client.client_id = "id"
         self.client.client_secret = "secret"
 
-    def _redirect_token_file(self, monkeypatch, tmp_path):
-        token_file = tmp_path / "strava_token.json"
-        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
-        monkeypatch.setattr(sc, "TOKEN_FILE", token_file)
-        return token_file
-
-    def test_persists_new_token(self, tmp_path, monkeypatch):
-        token_file = self._redirect_token_file(monkeypatch, tmp_path)
+    def test_returns_new_token(self):
         new_token = {
             "access_token": "fresh",
             "refresh_token": "rot",
@@ -893,11 +923,8 @@ class TestRefreshToken:
             result = self.client._refresh_token("old_refresh")
 
         assert result == new_token
-        assert token_file.exists()
-        assert json.loads(token_file.read_text()) == new_token
 
-    def test_post_called_with_grant_refresh(self, tmp_path, monkeypatch):
-        self._redirect_token_file(monkeypatch, tmp_path)
+    def test_post_called_with_grant_refresh(self):
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"access_token": "x", "refresh_token": "y", "expires_at": 0}
         mock_resp.raise_for_status.return_value = None
@@ -916,8 +943,7 @@ class TestRefreshToken:
         with pytest.raises(ValueError, match="STRAVA_CLIENT_ID"):
             self.client._refresh_token("old")
 
-    def test_http_error_propagated(self, tmp_path, monkeypatch):
-        self._redirect_token_file(monkeypatch, tmp_path)
+    def test_http_error_propagated(self):
         mock_resp = MagicMock()
         mock_resp.raise_for_status.side_effect = requests.HTTPError("400 Bad Request")
         with patch("strava_client.requests.post", return_value=mock_resp):
@@ -926,77 +952,64 @@ class TestRefreshToken:
 
 
 # ===========================================================================
-# StravaClient.connect
+# StravaClient._ensure_fresh_token (refresh transparent piloté par le token)
 # ===========================================================================
 
-class TestConnect:
-    def setup_method(self):
-        self.client = StravaClient()
-        self.client.client_id = "id"
-        self.client.client_secret = "secret"
+class TestEnsureFreshToken:
+    """
+    Le client doit rafraîchir le token quand il expire dans <5 min
+    et propager le nouveau token via le callback `on_token_update`.
+    """
 
-    def _set_token_path(self, monkeypatch, tmp_path) -> "Path":
-        token_file = tmp_path / "strava_token.json"
-        monkeypatch.setattr(sc, "CACHE_DIR", tmp_path)
-        monkeypatch.setattr(sc, "TOKEN_FILE", token_file)
-        return token_file
+    def _new_token(self) -> dict:
+        return {
+            "access_token": "fresh",
+            "refresh_token": "rot2",
+            "expires_at": int(time.time()) + 21600,
+        }
 
-    def test_no_token_file_raises_value_error(self, tmp_path, monkeypatch):
-        self._set_token_path(monkeypatch, tmp_path)
-        with pytest.raises(ValueError, match="non trouvés"):
-            self.client.connect()
-
-    def test_corrupt_token_raises_value_error(self, tmp_path, monkeypatch):
-        token_file = self._set_token_path(monkeypatch, tmp_path)
-        token_file.write_text("not json")
-        with pytest.raises(ValueError, match="Impossible de lire"):
-            self.client.connect()
-
-    def test_fresh_token_does_not_refresh(self, tmp_path, monkeypatch):
-        token_file = self._set_token_path(monkeypatch, tmp_path)
-        token_file.write_text(json.dumps({
-            "access_token": "current",
-            "refresh_token": "rot",
-            "expires_at": int(time.time()) + 3600,
-        }))
-        with patch.object(self.client, "_refresh_token") as mock_refresh:
-            self.client.connect()
+    def test_fresh_token_does_not_refresh(self):
+        client = _make_client(expires_at=int(time.time()) + 3600)
+        with patch.object(client, "_refresh_token") as mock_refresh:
+            client._ensure_fresh_token()
         mock_refresh.assert_not_called()
-        assert self.client._access_token == "current"
-        assert self.client._connected is True
+        assert client._token["access_token"] == "tok"
 
-    def test_expired_token_triggers_refresh(self, tmp_path, monkeypatch):
-        token_file = self._set_token_path(monkeypatch, tmp_path)
-        token_file.write_text(json.dumps({
-            "access_token": "stale",
-            "refresh_token": "rot",
-            "expires_at": int(time.time()) - 100,
-        }))
-        new_token = {
-            "access_token": "fresh",
-            "refresh_token": "rot2",
-            "expires_at": int(time.time()) + 21600,
-        }
-        with patch.object(self.client, "_refresh_token", return_value=new_token) as mock_refresh:
-            self.client.connect()
+    def test_expired_token_triggers_refresh_and_callback(self):
+        new_token = self._new_token()
+        on_update = MagicMock()
+        client = StravaClient(
+            token={"access_token": "stale", "refresh_token": "rot", "expires_at": int(time.time()) - 100},
+            athlete_id=42,
+            on_token_update=on_update,
+        )
+        with patch.object(client, "_refresh_token", return_value=new_token) as mock_refresh:
+            client._ensure_fresh_token()
         mock_refresh.assert_called_once_with("rot")
-        assert self.client._access_token == "fresh"
+        assert client._token == new_token
+        on_update.assert_called_once_with(new_token)
 
-    def test_token_within_5min_window_triggers_refresh(self, tmp_path, monkeypatch):
-        # La fenêtre de refresh est expires_at - 300s ; un token expirant
-        # dans 60 s doit donc déjà déclencher un refresh.
-        token_file = self._set_token_path(monkeypatch, tmp_path)
-        token_file.write_text(json.dumps({
-            "access_token": "soon_stale",
-            "refresh_token": "rot",
-            "expires_at": int(time.time()) + 60,
-        }))
-        new_token = {
-            "access_token": "fresh",
-            "refresh_token": "rot2",
-            "expires_at": int(time.time()) + 21600,
-        }
-        with patch.object(self.client, "_refresh_token", return_value=new_token) as mock_refresh:
-            self.client.connect()
+    def test_token_within_5min_window_triggers_refresh(self):
+        # Fenêtre de refresh : expires_at - 300s ; expirant dans 60 s → refresh.
+        new_token = self._new_token()
+        client = _make_client(expires_at=int(time.time()) + 60)
+        with patch.object(client, "_refresh_token", return_value=new_token) as mock_refresh:
+            client._ensure_fresh_token()
         mock_refresh.assert_called_once()
-        assert self.client._access_token == "fresh"
+        assert client._token["access_token"] == "fresh"
+
+    def test_no_callback_does_not_crash(self):
+        new_token = self._new_token()
+        client = StravaClient(
+            token={"access_token": "stale", "refresh_token": "rot", "expires_at": int(time.time()) - 100},
+            athlete_id=42,
+            on_token_update=None,
+        )
+        with patch.object(client, "_refresh_token", return_value=new_token):
+            client._ensure_fresh_token()
+        assert client._token == new_token
+
+    def test_missing_token_raises(self):
+        client = StravaClient(token={}, athlete_id=42)
+        with pytest.raises(ValueError, match="manquant"):
+            client._ensure_fresh_token()

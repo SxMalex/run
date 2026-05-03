@@ -4,16 +4,23 @@ import plotly.graph_objects as go
 import polyline as polyline_lib
 import streamlit as st
 
-from strava_client import TOKEN_FILE, map_zoom
+from strava_client import StravaClient, map_zoom
+
+
+def _has_session_token() -> bool:
+    return bool(
+        st.session_state.get("strava_token")
+        and st.session_state.get("strava_athlete_id")
+    )
 
 
 def require_token() -> None:
     """
     Garde à appeler en haut des sous-pages : si l'utilisateur n'a pas
-    de token Strava, on affiche un message + un lien vers l'accueil
+    de token Strava en session, on affiche un message + un lien vers l'accueil
     (où vit le flux OAuth) et on arrête le rendu de la page courante.
     """
-    if TOKEN_FILE.exists():
+    if _has_session_token():
         return
     st.title("🔒 Connexion requise")
     st.warning(
@@ -22,6 +29,23 @@ def require_token() -> None:
     )
     st.page_link("main.py", label="Aller à la page de connexion", icon="🏠")
     st.stop()
+
+
+def _persist_token(token: dict) -> None:
+    """Callback appelé par StravaClient quand le token est rafraîchi."""
+    st.session_state["strava_token"] = token
+
+
+def get_strava_client() -> StravaClient:
+    """
+    Construit un `StravaClient` à partir du token de session courant.
+    À appeler après `require_token()`.
+    """
+    return StravaClient(
+        token=st.session_state["strava_token"],
+        athlete_id=st.session_state["strava_athlete_id"],
+        on_token_update=_persist_token,
+    )
 
 
 def render_activity_map(details_data: dict, height: int = 420) -> None:

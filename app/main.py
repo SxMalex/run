@@ -11,13 +11,11 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from strava_client import (
-    StravaClient,
-    TOKEN_FILE,
     exchange_code,
     get_auth_url,
     safe_load_activities,
 )
-from ui_helpers import render_activity_map
+from ui_helpers import get_strava_client, render_activity_map
 
 # ---------------------------------------------------------------------------
 # Configuration de la page
@@ -59,27 +57,49 @@ _client_id = os.getenv("STRAVA_CLIENT_ID", "")
 _client_secret = os.getenv("STRAVA_CLIENT_SECRET", "")
 _redirect_uri = os.getenv("STRAVA_REDIRECT_URI", "http://localhost:8501")
 
-# Étape 1 : pas de token → afficher la page de connexion
-# (vérifié avant le callback pour éviter une boucle si le token vient d'être créé)
 
-# Étape 2 : Strava a redirigé ici avec ?code=XXX → échange le code contre les tokens
+def _has_token() -> bool:
+    return bool(
+        st.session_state.get("strava_token")
+        and st.session_state.get("strava_athlete_id")
+    )
+
+
+def _store_token(token_data: dict) -> None:
+    """Stocke token + athlete_id en session après l'échange OAuth."""
+    st.session_state["strava_token"] = {
+        "access_token": token_data["access_token"],
+        "refresh_token": token_data["refresh_token"],
+        "expires_at": token_data["expires_at"],
+    }
+    athlete = token_data.get("athlete") or {}
+    st.session_state["strava_athlete_id"] = int(athlete["id"])
+
+
+# Étape 1 : callback OAuth (Strava redirige avec ?code=XXX).
+# Note : on ne valide pas un paramètre `state` côté serveur car
+# st.session_state ne survit pas toujours au redirect externe vers Strava
+# (la WebSocket se reconnecte parfois en nouvelle session). Le redirect_uri
+# est vérouillé côté Strava → le risque CSRF résiduel est marginal pour
+# ce dashboard en lecture seule.
 _params = st.query_params
-if "code" in _params:
+if "code" in _params and not _has_token():
     if "error" in _params:
         st.error(f"Autorisation refusée : {_params['error']}")
+        st.query_params.clear()
     else:
         with st.spinner("Connexion à Strava en cours..."):
             try:
                 _token = exchange_code(_client_id, _client_secret, _params["code"])
+                _store_token(_token)
                 st.query_params.clear()
-                st.cache_resource.clear()
                 st.rerun()
             except Exception as e:
                 st.error(f"Erreur lors de l'échange du code : {e}")
                 st.query_params.clear()
 
-# Étape 1 (suite) : toujours pas de token → page de connexion
-if not TOKEN_FILE.exists():
+# Étape 2 : pas de token → page de connexion
+if not _has_token():
     st.markdown("""
     <div class="dashboard-header" style="text-align:center; padding: 48px 32px;">
         <h1 style="margin:0; font-size: 2.5rem;">🏃 Running Dashboard</h1>
@@ -100,8 +120,7 @@ if not TOKEN_FILE.exists():
             )
             st.info(
                 "Créez votre application Strava sur [strava.com/settings/api](https://www.strava.com/settings/api)\n\n"
-                f"Définissez l'**Authorization Callback Domain** sur `localhost`\n\n"
-                f"Et l'URL de redirection sur `{_redirect_uri}`"
+                f"Définissez l'**Authorization Callback Domain** sur le domaine de `{_redirect_uri}`"
             )
         else:
             _auth_url = get_auth_url(_client_id, _redirect_uri)
@@ -123,33 +142,30 @@ if not TOKEN_FILE.exists():
             )
     st.stop()
 
-@st.cache_resource
-def get_strava_client() -> StravaClient:
-    """Singleton du client Strava."""
-    return StravaClient()
-
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_athlete() -> dict:
+def load_athlete(athlete_id: int) -> dict:
     return get_strava_client().get_athlete()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_athlete_stats() -> dict:
+def load_athlete_stats(athlete_id: int) -> dict:
     return get_strava_client().get_athlete_stats()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_athlete_zones() -> list:
+def load_athlete_zones(athlete_id: int) -> list:
     zones_data = get_strava_client().get_athlete_zones()
     return zones_data.get("heart_rate", {}).get("zones", [])
 
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des activités Strava...")
-def load_activities(limit: int = 100) -> tuple[pd.DataFrame, str | None]:
-    """Charge les activités depuis Strava (avec cache Streamlit 1h)."""
+def load_activities(athlete_id: int, limit: int = 100) -> tuple[pd.DataFrame, str | None]:
+    """Charge les activités depuis Strava (cache Streamlit 1h, par athlète)."""
     return safe_load_activities(get_strava_client(), limit)
 
+
+_athlete_id = st.session_state["strava_athlete_id"]
 
 # ---------------------------------------------------------------------------
 # Barre latérale
@@ -168,7 +184,14 @@ with st.sidebar:
     if st.button("🔄 Actualiser les données", width='stretch'):
         get_strava_client().invalidate_cache()
         st.cache_data.clear()
-        st.cache_resource.clear()
+        st.rerun()
+
+    if st.button("🚪 Déconnexion", width='stretch'):
+        # On vide uniquement la session — pas le cache global : ça affecterait
+        # les autres utilisateurs connectés. Le cache @st.cache_data est isolé
+        # par athlete_id via les arguments de fonction, donc inoffensif.
+        for key in ("strava_token", "strava_athlete_id"):
+            st.session_state.pop(key, None)
         st.rerun()
 
     st.divider()
@@ -178,7 +201,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Chargement des données
 # ---------------------------------------------------------------------------
-df, error = load_activities(nb_activites)
+df, error = load_activities(_athlete_id, nb_activites)
 
 # ---------------------------------------------------------------------------
 # En-tête principal
@@ -192,10 +215,8 @@ st.caption("Analyse de vos performances de course — Données Strava")
 if error:
     st.error(f"**Erreur de connexion Strava**\n\n{error}")
     if st.button("🔄 Reconnecter à Strava"):
-        get_strava_client().invalidate_cache()
-        TOKEN_FILE.unlink(missing_ok=True)
-        st.cache_data.clear()
-        st.cache_resource.clear()
+        for key in ("strava_token", "strava_athlete_id"):
+            st.session_state.pop(key, None)
         st.rerun()
     st.stop()
 
@@ -206,7 +227,7 @@ if df.empty:
 # Chaussures dans la sidebar — chargé ici, après vérification de la connexion
 with st.sidebar:
     st.divider()
-    athlete = load_athlete()
+    athlete = load_athlete(_athlete_id)
     shoes = athlete.get("shoes", [])
     if athlete and not shoes:
         st.markdown("### 👟 Chaussures")
@@ -254,7 +275,7 @@ st.divider()
 # ---------------------------------------------------------------------------
 # Statistiques de carrière
 # ---------------------------------------------------------------------------
-stats = load_athlete_stats()
+stats = load_athlete_stats(_athlete_id)
 if stats:
     def _totals(key: str) -> tuple[float, float, int]:
         t = stats.get(key, {})
@@ -331,12 +352,12 @@ st.subheader("🏅 Dernière activité")
 
 
 @st.cache_data(ttl=3600, show_spinner="Chargement des détails...")
-def load_last_activity_details(activity_id: int) -> dict:
+def load_last_activity_details(athlete_id: int, activity_id: int) -> dict:
     return get_strava_client().get_activity_details(activity_id)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_last_activity_streams(activity_id: int) -> dict:
+def load_last_activity_streams(athlete_id: int, activity_id: int) -> dict:
     return get_strava_client().get_streams(activity_id)
 
 
@@ -427,8 +448,8 @@ if not running_df.empty:
     m8.metric("⛰️ D+",        f"{int(last['elevationGain'])} m" if pd.notna(last.get("elevationGain")) else "—")
 
     with st.spinner("Chargement de la carte et des splits..."):
-        details = load_last_activity_details(int(last["activityId"]))
-        streams = load_last_activity_streams(int(last["activityId"]))
+        details = load_last_activity_details(_athlete_id, int(last["activityId"]))
+        streams = load_last_activity_streams(_athlete_id, int(last["activityId"]))
 
     if details:
         splits = details.get("splits", [])
@@ -476,7 +497,7 @@ if not running_df.empty:
         with col_hr:
             st.caption("Fréquence cardiaque par km")
             if not splits_df.empty:
-                _render_hr_chart(splits_df, max_hr, load_athlete_zones())
+                _render_hr_chart(splits_df, max_hr, load_athlete_zones(_athlete_id))
 else:
     st.info("Aucune activité de course trouvée dans les données chargées.")
 

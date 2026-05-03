@@ -183,17 +183,11 @@ docker compose logs -f
 # Reconstruire l'image après modification du code
 docker compose build app && docker compose up -d app
 
-# Vider le cache des données
-docker compose exec app find /app/.cache -name "*.json" -not -name "strava_token.json" -delete
+# Vider le cache disque (toutes athlètes confondus)
+docker compose exec app rm -rf /app/.cache
 
-# Se déconnecter de Strava (supprime le token)
-docker compose exec app rm -f /app/.cache/strava_token.json
-
-# Lister les modèles Ollama disponibles
-docker compose exec ollama ollama list
-
-# Télécharger un autre modèle
-./scripts/pull_model.sh mistral
+# Se déconnecter : utiliser le bouton « Déconnexion » dans la barre latérale
+# (le token vit en st.session_state, plus sur disque)
 ```
 
 ---
@@ -244,12 +238,13 @@ ollama:
 
 ```
 run/
-├── docker-compose.yml          # Orchestration Docker
+├── docker-compose.yml          # Orchestration Docker (dev)
+├── docker-compose.prod.yml     # Stack prod : Caddy + Streamlit
+├── Caddyfile                   # Reverse-proxy HTTPS + headers de sécurité
 ├── .env.example                # Template de configuration
 ├── pytest.ini                  # Configuration des tests (pythonpath = app)
 ├── README.md                   # Ce fichier
 ├── scripts/
-│   ├── strava_auth.py          # Authentification OAuth (alternative CLI)
 │   └── pull_model.sh           # Téléchargement du modèle Ollama
 ├── tests/
 │   ├── conftest.py             # Fixtures et stubs partagés
@@ -351,7 +346,8 @@ Streamlit transforme du code Python en application web sans HTML/JS. Chaque inte
 L'accès aux données passe par l'API REST officielle Strava avec le flux OAuth 2.0 :
 - **Access token** : valide 6h, utilisé dans chaque requête HTTP
 - **Refresh token** : permanent, permet de regénérer un access token automatiquement
-- Les tokens sont stockés dans un fichier JSON sur le volume Docker (`/app/.cache/strava_token.json`)
+- Les tokens vivent dans `st.session_state` côté navigateur — per-session, jamais persistés sur disque (multi-user safe)
+- Le cache disque des données API est cloisonné par `athlete_id` dans `app/.cache/{athlete_id}/`
 
 **Parcours — OpenRouteService**
 

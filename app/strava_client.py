@@ -1,16 +1,19 @@
 """
 Client Strava — récupération et mise en cache des données d'entraînement.
+
+Multi-user : le token vit dans `st.session_state` côté UI (jamais sur disque).
+Le cache disque est cloisonné par athlete_id (sous-dossier dédié), donc
+deux utilisateurs ne peuvent pas se voir mutuellement.
 """
 
 import os
 import json
 import time
+import shutil
 import hashlib
 import logging
-import threading
-from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from urllib.parse import quote
 
 import pandas as pd
@@ -19,11 +22,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_token_refresh_lock = threading.Lock()
-
 CACHE_DIR = Path(os.getenv("CACHE_DIR", "/app/.cache"))
 CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))
-TOKEN_FILE = CACHE_DIR / "strava_token.json"
 
 STRAVA_AUTH_URL = "https://www.strava.com/oauth/authorize"
 STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
@@ -31,16 +31,17 @@ STRAVA_API_BASE = "https://www.strava.com/api/v3"
 
 
 # ---------------------------------------------------------------------------
-# Utilitaires de cache disque
+# Utilitaires de cache disque (cloisonné par athlete_id)
 # ---------------------------------------------------------------------------
 
-def _cache_path(key: str) -> Path:
+def _cache_path(athlete_id: int, key: str) -> Path:
+    """Cache file path under a per-athlete subdirectory."""
     safe_key = hashlib.md5(key.encode()).hexdigest()
-    return CACHE_DIR / f"{safe_key}.json"
+    return CACHE_DIR / str(athlete_id) / f"{safe_key}.json"
 
 
-def _cache_get(key: str) -> Optional[object]:
-    path = _cache_path(key)
+def _cache_get(athlete_id: int, key: str) -> Optional[object]:
+    path = _cache_path(athlete_id, key)
     if not path.exists():
         return None
     try:
@@ -54,22 +55,14 @@ def _cache_get(key: str) -> Optional[object]:
     return None
 
 
-def _cache_set(key: str, data: object) -> None:
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = _cache_path(key)
+def _cache_set(athlete_id: int, key: str, data: object) -> None:
+    path = _cache_path(athlete_id, key)
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"timestamp": time.time(), "data": data}, f, default=str)
     except OSError as e:
         logger.warning("Impossible d'écrire le cache : %s", e)
-
-
-def _write_token(token_data: dict) -> None:
-    """Écrit les tokens Strava sur disque avec permissions restrictives (600)."""
-    def _opener(path, flags):
-        return os.open(path, flags, 0o600)
-    with open(TOKEN_FILE, "w", encoding="utf-8", opener=_opener) as f:
-        json.dump(token_data, f)
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +84,7 @@ def get_auth_url(client_id: str, redirect_uri: str) -> str:
 def exchange_code(client_id: str, client_secret: str, code: str) -> dict:
     """
     Échange un code d'autorisation contre des tokens d'accès.
-    Sauvegarde les tokens dans TOKEN_FILE et retourne les données du token.
+    Retourne le dict de token (l'appelant le stocke en session_state).
     """
     resp = requests.post(
         STRAVA_TOKEN_URL,
@@ -104,10 +97,7 @@ def exchange_code(client_id: str, client_secret: str, code: str) -> dict:
         timeout=30,
     )
     resp.raise_for_status()
-    token_data = resp.json()
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    _write_token(token_data)
-    return token_data
+    return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -117,56 +107,36 @@ def exchange_code(client_id: str, client_secret: str, code: str) -> dict:
 class StravaClient:
     """
     Encapsule la connexion à l'API Strava et la récupération des données.
-    Utilise un cache disque pour limiter les appels à l'API.
+
+    Le token vit dans `st.session_state` côté UI ; on le passe au constructeur
+    et `on_token_update` permet d'écrire le token rafraîchi dans la session.
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        token: dict,
+        athlete_id: int,
+        on_token_update: Optional[Callable[[dict], None]] = None,
+    ):
         self.client_id = os.getenv("STRAVA_CLIENT_ID", "")
         self.client_secret = os.getenv("STRAVA_CLIENT_SECRET", "")
-        self._access_token: Optional[str] = None
-        self._connected = False
+        self.athlete_id = int(athlete_id)
+        self._token = token
+        self._on_token_update = on_token_update
 
     # ------------------------------------------------------------------
     # Connexion et gestion des tokens
     # ------------------------------------------------------------------
 
-    def connect(self) -> None:
-        """
-        Charge les tokens depuis le fichier de cache et rafraîchit si nécessaire.
-        """
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-        if not TOKEN_FILE.exists():
-            raise ValueError(
-                "Tokens Strava non trouvés.\n"
-                "Exécutez le script d'authentification :\n"
-                "  python scripts/strava_auth.py\n"
-                "puis redémarrez l'application."
-            )
-
-        try:
-            with open(TOKEN_FILE, "r", encoding="utf-8") as f:
-                token_data = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            raise ValueError(f"Impossible de lire le fichier de token Strava : {e}") from e
-
-        # Rafraîchit si le token expire dans moins de 5 minutes.
-        # Double-checked locking : un seul thread effectue le refresh,
-        # les autres réutilisent le token fraîchement écrit sur disque.
-        if time.time() > token_data.get("expires_at", 0) - 300:
-            with _token_refresh_lock:
-                try:
-                    with open(TOKEN_FILE, "r", encoding="utf-8") as f:
-                        token_data = json.load(f)
-                except (json.JSONDecodeError, OSError):
-                    pass
-                if time.time() > token_data.get("expires_at", 0) - 300:
-                    logger.info("Token Strava expiré, rafraîchissement...")
-                    token_data = self._refresh_token(token_data["refresh_token"])
-
-        self._access_token = token_data["access_token"]
-        self._connected = True
-        logger.info("Connecté à Strava.")
+    def _ensure_fresh_token(self) -> None:
+        """Rafraîchit le token s'il expire dans moins de 5 minutes."""
+        if not self._token or "access_token" not in self._token:
+            raise ValueError("Token Strava manquant ou invalide.")
+        if time.time() > self._token.get("expires_at", 0) - 300:
+            logger.info("Token Strava expiré, rafraîchissement...")
+            self._token = self._refresh_token(self._token["refresh_token"])
+            if self._on_token_update is not None:
+                self._on_token_update(self._token)
 
     def _refresh_token(self, refresh_token: str) -> dict:
         """Rafraîchit le token d'accès via le refresh token."""
@@ -185,18 +155,12 @@ class StravaClient:
             timeout=30,
         )
         resp.raise_for_status()
-        token_data = resp.json()
-        _write_token(token_data)
-        return token_data
-
-    def _ensure_connected(self) -> None:
-        if not self._connected or self._access_token is None:
-            self.connect()
+        return resp.json()
 
     def _get(self, endpoint: str, params: dict = None) -> dict | list:
         """Effectue un GET authentifié vers l'API Strava, avec 1 retry sur erreur 5xx."""
-        self._ensure_connected()
-        headers = {"Authorization": f"Bearer {self._access_token}"}
+        self._ensure_fresh_token()
+        headers = {"Authorization": f"Bearer {self._token['access_token']}"}
         url = f"{STRAVA_API_BASE}/{endpoint}"
 
         # Tour 0 : si 5xx → on retente après 2 s. Tour 1 : on laisse remonter quoi qu'il arrive.
@@ -222,8 +186,8 @@ class StravaClient:
         distance_km, duration_min, avgPace, avgPace_sec,
         avgHR, maxHR, avgCadence, calories, elevationGain, avgSpeed_ms
         """
-        cache_key = f"strava_activities_{self.client_id}_{limit}"
-        cached = _cache_get(cache_key)
+        cache_key = f"activities_{limit}"
+        cached = _cache_get(self.athlete_id, cache_key)
         if cached is not None:
             logger.info("Activités chargées depuis le cache.")
             df = pd.DataFrame(cached)
@@ -231,7 +195,6 @@ class StravaClient:
                 df["startTimeLocal"] = pd.to_datetime(df["startTimeLocal"], utc=True).dt.tz_convert(None)
             return df
 
-        self._ensure_connected()
         logger.info("Récupération de %d activités depuis Strava...", limit)
 
         activities = []
@@ -283,7 +246,7 @@ class StravaClient:
                 "workoutType": act.get("workout_type", 0) or 0,
             })
 
-        _cache_set(cache_key, rows)
+        _cache_set(self.athlete_id, cache_key, rows)
         df = pd.DataFrame(rows)
         if not df.empty:
             df["startTimeLocal"] = pd.to_datetime(df["startTimeLocal"], utc=True).dt.tz_convert(None)
@@ -296,12 +259,11 @@ class StravaClient:
         Retourne {} en cas d'erreur API (l'erreur est loggée) ; les appelants
         doivent tester `if not result` pour distinguer erreur et données réelles.
         """
-        cache_key = f"strava_activity_detail_{activity_id}"
-        cached = _cache_get(cache_key)
+        cache_key = f"activity_detail_{activity_id}"
+        cached = _cache_get(self.athlete_id, cache_key)
         if cached is not None:
             return cached
 
-        self._ensure_connected()
         logger.info("Récupération des détails de l'activité %s...", activity_id)
 
         try:
@@ -319,7 +281,7 @@ class StravaClient:
             "summary": self._summarize_activity(details),
         }
 
-        _cache_set(cache_key, result)
+        _cache_set(self.athlete_id, cache_key, result)
         return result
 
     def _extract_splits(self, activity_id: int, details: dict) -> list[dict]:
@@ -447,6 +409,7 @@ class StravaClient:
             }
 
         running = df[df["activityType"] == "running"].copy()
+        from datetime import datetime, timedelta
         now = datetime.now()
         start_of_week = now - timedelta(days=now.weekday())
         start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -477,14 +440,13 @@ class StravaClient:
 
     def get_athlete(self) -> dict:
         """Retourne le profil de l'athlète (poids, chaussures, id…)."""
-        cache_key = f"strava_athlete_{self.client_id}"
-        cached = _cache_get(cache_key)
+        cache_key = "athlete"
+        cached = _cache_get(self.athlete_id, cache_key)
         if cached is not None:
             return cached
-        self._ensure_connected()
         try:
             data = self._get("athlete")
-            _cache_set(cache_key, data)
+            _cache_set(self.athlete_id, cache_key, data)
             return data
         except Exception as e:
             logger.warning("Profil athlète indisponible : %s", e)
@@ -492,17 +454,13 @@ class StravaClient:
 
     def get_athlete_stats(self) -> dict:
         """Retourne les totaux all-time / YTD / 4 semaines pour course et vélo."""
-        athlete = self.get_athlete()
-        athlete_id = athlete.get("id")
-        if not athlete_id:
-            return {}
-        cache_key = f"strava_athlete_stats_{athlete_id}"
-        cached = _cache_get(cache_key)
+        cache_key = "athlete_stats"
+        cached = _cache_get(self.athlete_id, cache_key)
         if cached is not None:
             return cached
         try:
-            data = self._get(f"athletes/{athlete_id}/stats")
-            _cache_set(cache_key, data)
+            data = self._get(f"athletes/{self.athlete_id}/stats")
+            _cache_set(self.athlete_id, cache_key, data)
             return data
         except Exception as e:
             logger.warning("Stats athlète indisponibles : %s", e)
@@ -510,14 +468,13 @@ class StravaClient:
 
     def get_athlete_zones(self) -> dict:
         """Retourne les zones FC (et puissance) configurées dans Strava."""
-        cache_key = f"strava_zones_{self.client_id}"
-        cached = _cache_get(cache_key)
+        cache_key = "zones"
+        cached = _cache_get(self.athlete_id, cache_key)
         if cached is not None:
             return cached
-        self._ensure_connected()
         try:
             data = self._get("athlete/zones")
-            _cache_set(cache_key, data)
+            _cache_set(self.athlete_id, cache_key, data)
             return data
         except Exception as e:
             logger.warning("Zones athlète indisponibles : %s", e)
@@ -530,12 +487,11 @@ class StravaClient:
         Retourne un dict {nom_distance: {elapsed_time, date, activity_name}}.
         Conserve le meilleur temps toutes activités confondues.
         """
-        cache_key = f"strava_best_efforts_{self.client_id}_{'_'.join(str(i) for i in sorted(activity_ids))}"
-        cached = _cache_get(cache_key)
+        cache_key = f"best_efforts_{'_'.join(str(i) for i in sorted(activity_ids))}"
+        cached = _cache_get(self.athlete_id, cache_key)
         if cached is not None:
             return cached
 
-        self._ensure_connected()
         best: dict[str, dict] = {}
 
         for activity_id in activity_ids:
@@ -563,7 +519,7 @@ class StravaClient:
                         "pr_rank": pr_rank,
                     }
 
-        _cache_set(cache_key, best)
+        _cache_set(self.athlete_id, cache_key, best)
         return best
 
     def get_splits_aggregate(self, activity_ids: list[int]) -> pd.DataFrame:
@@ -575,8 +531,8 @@ class StravaClient:
         """
         rows = []
         for aid in activity_ids:
-            cache_key = f"strava_activity_detail_{aid}"
-            detail_data = _cache_get(cache_key)
+            cache_key = f"activity_detail_{aid}"
+            detail_data = _cache_get(self.athlete_id, cache_key)
             if detail_data is None:
                 try:
                     detail_data = self.get_activity_details(aid)
@@ -606,12 +562,11 @@ class StravaClient:
         Retourne un dict {type: [valeurs]} — types disponibles selon l'appareil :
         time, distance, heartrate, altitude, velocity_smooth, cadence, grade_smooth.
         """
-        cache_key = f"strava_streams_{activity_id}"
-        cached = _cache_get(cache_key)
+        cache_key = f"streams_{activity_id}"
+        cached = _cache_get(self.athlete_id, cache_key)
         if cached is not None:
             return cached
 
-        self._ensure_connected()
         keys = "time,distance,heartrate,altitude,velocity_smooth,cadence,grade_smooth"
         try:
             raw = self._get(
@@ -619,18 +574,18 @@ class StravaClient:
                 {"keys": keys, "key_by_type": "true"},
             )
             result = {k: v.get("data", []) for k, v in raw.items() if isinstance(v, dict)}
-            _cache_set(cache_key, result)
+            _cache_set(self.athlete_id, cache_key, result)
             return result
         except Exception as e:
             logger.warning("Streams indisponibles pour l'activité %s : %s", activity_id, e)
             return {}
 
     def invalidate_cache(self) -> None:
-        """Supprime les fichiers de cache des données (préserve le token Strava)."""
-        for f in CACHE_DIR.glob("*.json"):
-            if f != TOKEN_FILE:
-                f.unlink(missing_ok=True)
-        logger.info("Cache invalidé.")
+        """Supprime le cache disque de cet athlète uniquement."""
+        athlete_dir = CACHE_DIR / str(self.athlete_id)
+        if athlete_dir.exists():
+            shutil.rmtree(athlete_dir, ignore_errors=True)
+        logger.info("Cache invalidé pour l'athlète %s.", self.athlete_id)
 
 
 # ---------------------------------------------------------------------------
@@ -660,7 +615,7 @@ def safe_load_activities(
             )
         return pd.DataFrame(), f"Erreur Strava ({status})"
     except ValueError as e:
-        # Token absent / illisible / config manquante (levé par connect()).
+        # Token absent / illisible / config manquante.
         return pd.DataFrame(), str(e)
     except requests.RequestException as e:
         return pd.DataFrame(), f"Erreur réseau Strava : {e}"

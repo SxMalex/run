@@ -4,8 +4,8 @@
 
 - **Streamlit 1.56+** — multipage app (`app/main.py` + `app/pages/`)
 - **Python 3.12**, Pandas, Plotly, NumPy
-- **Docker Compose** — service `app` (Streamlit)
-- **Strava API** via OAuth2 — token stocké dans `app/.cache/strava_token.json`
+- **Docker Compose** — service `app` (Streamlit), service `caddy` (reverse-proxy HTTPS) en prod
+- **Strava API** via OAuth2 — token vit dans `st.session_state` (per-user, jamais sur disque)
 - **OpenRouteService API** — génération de parcours GPX (page 4)
 
 ## Structure
@@ -29,11 +29,19 @@ tests/
 ## Lancer le projet
 
 ```bash
-docker compose up          # démarre l'app Streamlit
+docker compose up          # dev local — Streamlit sur :8501
 docker compose restart app # recharger après un changement de config Docker
 ```
 
 Streamlit recharge automatiquement les fichiers `.py` modifiés — pas besoin de redémarrer le container pour les changements de code.
+
+### Production multi-user
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Caddy frontalise Streamlit en HTTPS (Let's Encrypt auto). Variables `.env` requises : `PUBLIC_DOMAIN`, `ACME_EMAIL`, `STRAVA_REDIRECT_URI=https://${PUBLIC_DOMAIN}/`. Le port `:8501` n'est pas exposé publiquement.
 
 ## Tests
 
@@ -66,6 +74,14 @@ Les tests sont dans `tests/`, le `pythonpath` pytest pointe sur `app/` (cf. `pyt
 - **Cadence course** : Strava envoie des RPM (tours/min), à doubler pour obtenir des SPM (foulées/min).
 - **Calories** : priorité à la valeur API Strava, estimation par formule si zéro ou absente.
 
+## Multi-user (ne pas casser)
+
+- **Token Strava** : vit en `st.session_state["strava_token"]` — per-session, jamais sur disque. `StravaClient` reçoit le token + un callback `on_token_update` qui réécrit dans la session après refresh.
+- **Cache disque** cloisonné par athlète : `app/.cache/{athlete_id}/{md5}.json`. Toute donnée mise en cache transite par `_cache_get(athlete_id, key)` / `_cache_set(athlete_id, key, data)`.
+- **`@st.cache_data` Streamlit** : toutes les fonctions cachées prennent un `athlete_id` en argument — c'est ce qui isole les caches inter-utilisateurs.
+- **Pas de `@st.cache_resource` sur `StravaClient`** — il serait partagé entre toutes les sessions. Utiliser `ui_helpers.get_strava_client()` qui le construit depuis la session courante.
+- **Pas de validation OAuth `state`** : `st.session_state` ne survit pas toujours au redirect externe vers Strava et revient (la WebSocket se reconnecte parfois en session neuve). Le `redirect_uri` étant verrouillé côté Strava, le risque CSRF résiduel est marginal pour ce dashboard en lecture seule.
+
 ## Règles de commit
 
 - **Ne jamais commiter sans demande explicite** de l'utilisateur.
@@ -80,6 +96,12 @@ Les tests sont dans `tests/`, le `pythonpath` pytest pointe sur `app/` (cf. `pyt
 ```
 STRAVA_CLIENT_ID=
 STRAVA_CLIENT_SECRET=
-STRAVA_REDIRECT_URI=http://localhost:8501
+STRAVA_REDIRECT_URI=http://localhost:8501   # https://${PUBLIC_DOMAIN}/ en prod
 ORS_API_KEY=           # optionnel — page Prochaine sortie
+
+# Production uniquement (docker-compose.prod.yml)
+PUBLIC_DOMAIN=running.exemple.com
+ACME_EMAIL=admin@exemple.com
 ```
+
+`STRAVA_REDIRECT_URI` doit matcher exactement l'**Authorization Callback Domain** déclaré dans la console Strava (`strava.com/settings/api`).
