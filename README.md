@@ -16,6 +16,7 @@ qu'en production derrière un reverse-proxy HTTPS.
 - **Statistiques** — 6 onglets : volume, allure, FC, cadence, régularité, charge d'entraînement (CTL/ATL/TSB)
 - **IA Coach** — génère un prompt prêt à coller dans n'importe quel LLM (Claude, ChatGPT, Gemini…) avec votre contexte d'entraînement
 - **Prochaine sortie** — recommandation de séance basée sur la forme actuelle + parcours en boucle généré sur OpenStreetMap + export GPX pour Garmin
+- **Heatmap** — cartes de chaleur des courses (fréquence, allure, FC, pente absolue, dénivelé signé) sur fond CartoDB sombre
 
 ---
 
@@ -162,6 +163,26 @@ Génère un prompt complet (system prompt + contexte d'entraînement + demande d
 
 Réglez le nombre de sorties incluses dans la barre latérale (5 à 50), copiez le prompt, collez-le où vous voulez.
 
+### 🔥 Heatmap (`/Heatmap`)
+
+Cartes de chaleur multi-calques calculées à partir des streams GPS haute résolution :
+
+- **Fréquence (linéaire / log)** — orange Strava, intensité = nombre de passages par pixel
+- **Allure moyenne** — bleu, brillant = rapide
+- **FC moyenne** — rouge, brillant = haut
+- **Pente absolue** — blanc, brillant = raide
+- **Dénivelé signé** — vert (descente) / violet (montée)
+
+Pipeline interne : récupération des streams `latlng`/`velocity_smooth`/`heartrate`/`altitude`, rasterisation
+en projection Web Mercator, flou gaussien, normalisation par percentiles, encodage PNG et superposition
+sur fond CartoDB DarkMatter via Folium. La logique pure (rasterize / blur / normalize / colormaps) vit
+dans `app/heatmap_logic.py` et est couverte par les tests.
+
+La sidebar permet d'ajuster la période, le type d'activité, le rayon autour de la maison (auto-détectée
+sur la cellule de départ la plus dense), la résolution et le rayon de clipping des tracks.
+
+Inspiré du notebook [moresamwilson/running-heatmap](https://github.com/moresamwilson/running-heatmap).
+
 ### 🗺️ Prochaine sortie (`/Next_Session`)
 
 Recommandation de séance et parcours inédit basés sur votre forme actuelle :
@@ -231,7 +252,8 @@ run/
 ├── tests/
 │   ├── conftest.py             # Fixtures pytest et stubs Streamlit/Plotly
 │   ├── test_strava_client.py   # Client Strava, cache, OAuth refresh
-│   └── test_next_session.py    # Logique TSB / recommandation / GPX
+│   ├── test_next_session.py    # Logique TSB / recommandation / GPX
+│   └── test_heatmap_logic.py   # Haversine, detect_home, rasterize, normalize
 └── app/
     ├── Dockerfile              # Image Docker (Python 3.12-slim, user non-root)
     ├── docker-entrypoint.sh    # Init du dossier .cache au démarrage
@@ -239,6 +261,7 @@ run/
     ├── main.py                 # Page d'accueil + flux OAuth Strava
     ├── strava_client.py        # Client API Strava + cache + transformations
     ├── next_session_logic.py   # Logique pure : TSB, recommandation, GPX
+    ├── heatmap_logic.py        # Logique pure : rasterize, blur, normalize, cmaps
     ├── ui_helpers.py           # require_token(), get_strava_client(), carte
     ├── stats_tabs/             # 6 onglets de la page Statistiques
     ├── .streamlit/config.toml  # XSRF/CORS, headless server
@@ -246,7 +269,8 @@ run/
         ├── 1_Activities.py     # Liste et détails des activités
         ├── 2_Stats.py          # Graphiques statistiques
         ├── 3_AI_Coach.py       # Prompts LLM prêts à copier
-        └── 4_Next_Session.py   # Recommandation + parcours ORS
+        ├── 4_Next_Session.py   # Recommandation + parcours ORS
+        └── 5_Heatmap.py        # Heatmaps multi-calques (Folium)
 ```
 
 ---
@@ -254,7 +278,7 @@ run/
 ## Tests
 
 ```bash
-# Lancer la suite (200 tests)
+# Lancer la suite (223 tests)
 python3 -m pytest tests/ -v
 
 # Avec couverture (nécessite pytest-cov)
@@ -265,6 +289,7 @@ Les tests couvrent les fonctions pures sans dépendance à Streamlit ou à l'API
 
 - `strava_client.py` — utilitaires (allure, calories, cadence, normalisation), méthodes DataFrame, cache disque cloisonné par athlète, refresh OAuth, retry sur 5xx, traduction d'erreurs HTTP
 - `next_session_logic.py` — calcul TSB, recommandation de séance, parsing ORS, génération GPX
+- `heatmap_logic.py` — haversine, détection de la maison, rasterisation, normalisation, génération des PNG
 
 ---
 

@@ -560,14 +560,16 @@ class StravaClient:
         """
         Récupère les streams haute-résolution d'une activité.
         Retourne un dict {type: [valeurs]} — types disponibles selon l'appareil :
-        time, distance, heartrate, altitude, velocity_smooth, cadence, grade_smooth.
+        time, distance, latlng, heartrate, altitude, velocity_smooth, cadence, grade_smooth.
         """
-        cache_key = f"streams_{activity_id}"
+        # v2 : ajout de latlng (heatmap). Nouvelle cache key pour ne pas servir
+        # d'anciens caches dépourvus du stream latlng.
+        cache_key = f"streams_v2_{activity_id}"
         cached = _cache_get(self.athlete_id, cache_key)
         if cached is not None:
             return cached
 
-        keys = "time,distance,heartrate,altitude,velocity_smooth,cadence,grade_smooth"
+        keys = "time,distance,latlng,heartrate,altitude,velocity_smooth,cadence,grade_smooth"
         try:
             raw = self._get(
                 f"activities/{activity_id}/streams",
