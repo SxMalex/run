@@ -3,7 +3,10 @@ Tableau de bord Running — Page d'accueil
 Affiche les métriques clés de la semaine/mois et les dernières activités.
 """
 
+import html
 import os
+from urllib.parse import parse_qsl, urlparse
+
 import numpy as np
 import streamlit as st
 import pandas as pd
@@ -130,11 +133,52 @@ if not _has_token():
                 "</p>",
                 unsafe_allow_html=True,
             )
-            st.link_button(
-                "🔗 Connecter à Strava",
-                _auth_url,
-                width='stretch',
-                type="primary",
+            # Soumission de formulaire pour rester dans l'onglet courant.
+            # Une soumission de <form> en GET navigue l'onglet par défaut
+            # (pas de target="_blank" forcé par le sanitizer Streamlit, qui
+            # ne réécrit que les <a>). On éclate les query params en hidden
+            # inputs pour que le browser construise l'URL OAuth proprement.
+            _parsed = urlparse(_auth_url)
+            _action = html.escape(
+                f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}", quote=True
+            )
+            _hidden_inputs = "\n".join(
+                f'<input type="hidden" '
+                f'name="{html.escape(k, quote=True)}" '
+                f'value="{html.escape(v, quote=True)}">'
+                for k, v in parse_qsl(_parsed.query)
+            )
+            st.markdown(
+                f"""
+                <form action="{_action}" method="get" style="margin: 0;">
+                  {_hidden_inputs}
+                  <button type="submit" class="strava-connect-btn">
+                    🔗 Connecter à Strava
+                  </button>
+                </form>
+                <style>
+                  .strava-connect-btn {{
+                    display: block;
+                    width: 100%;
+                    box-sizing: border-box;
+                    padding: 0.6rem 1rem;
+                    background: #fc4c02;
+                    color: white;
+                    text-align: center;
+                    font-weight: 600;
+                    font-size: 1rem;
+                    border-radius: 0.5rem;
+                    border: 1px solid #fc4c02;
+                    cursor: pointer;
+                    transition: background 0.15s ease;
+                  }}
+                  .strava-connect-btn:hover {{
+                    background: #e54400;
+                    border-color: #e54400;
+                  }}
+                </style>
+                """,
+                unsafe_allow_html=True,
             )
             st.caption(
                 f"Vous serez redirigé vers Strava, puis automatiquement "
