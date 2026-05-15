@@ -16,9 +16,16 @@ from datetime import datetime, timedelta
 from strava_client import (
     exchange_code,
     get_auth_url,
-    safe_load_activities,
 )
-from ui_helpers import get_strava_client, render_activity_map, render_strava_attribution
+from formatting import decimate
+from ui_helpers import (
+    cached_load_activities,
+    get_strava_client,
+    render_activity_map,
+    render_elevation_profile,
+    render_refresh_button,
+    render_strava_attribution,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration de la page
@@ -203,12 +210,6 @@ def load_athlete_zones(athlete_id: int) -> list:
     return zones_data.get("heart_rate", {}).get("zones", [])
 
 
-@st.cache_data(ttl=3600, show_spinner="Chargement des activités Strava...")
-def load_activities(athlete_id: int, limit: int = 100) -> tuple[pd.DataFrame, str | None]:
-    """Charge les activités depuis Strava (cache Streamlit 1h, par athlète)."""
-    return safe_load_activities(get_strava_client(), limit)
-
-
 _athlete_id = st.session_state["strava_athlete_id"]
 
 # ---------------------------------------------------------------------------
@@ -225,10 +226,7 @@ with st.sidebar:
         step=10,
     )
 
-    if st.button("🔄 Actualiser les données", width='stretch'):
-        get_strava_client().invalidate_cache()
-        st.cache_data.clear()
-        st.rerun()
+    render_refresh_button()
 
     if st.button("🚪 Déconnexion", width='stretch'):
         # On vide uniquement la session — pas le cache global : ça affecterait
@@ -245,7 +243,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Chargement des données
 # ---------------------------------------------------------------------------
-df, error = load_activities(_athlete_id, nb_activites)
+df, error = cached_load_activities(_athlete_id, nb_activites)
 
 # ---------------------------------------------------------------------------
 # En-tête principal
@@ -356,7 +354,15 @@ _RACE_TARGETS = [
 ]
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(
+    ttl=3600,
+    hash_funcs={
+        pd.DataFrame: lambda df: (
+            len(df),
+            str(df["startTimeLocal"].max()) if not df.empty else "",
+        )
+    },
+)
 def _riegel_estimates(runs: pd.DataFrame) -> list[dict]:
     valid = runs[(runs["avgPace_sec"] > 0) & (runs["distance_km"] >= 1.0)]
     if valid.empty:
@@ -411,25 +417,10 @@ def _render_elevation_profile(streams: dict) -> None:
     if not alts or not dists:
         st.caption("Profil altimétrique non disponible.")
         return
-    dists_km = [d / 1000 for d in dists]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=dists_km, y=alts,
-        mode="lines",
-        fill="tozeroy",
-        fillcolor="rgba(252,76,2,0.15)",
-        line=dict(color="#fc4c02", width=2),
-        hovertemplate="<b>%{x:.2f} km</b><br>Altitude : %{y:.0f} m<extra></extra>",
-    ))
-    fig.update_layout(
-        height=210,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#ccc"),
-        xaxis=dict(title="Distance (km)", gridcolor="rgba(255,255,255,0.05)"),
-        yaxis=dict(title="Altitude (m)", gridcolor="rgba(255,255,255,0.05)"),
-        margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
-    )
-    st.plotly_chart(fig)
+    # Décimation : un profil altimétrique n'a pas besoin de 10k points.
+    alts = decimate(alts)
+    dists = decimate(dists)
+    render_elevation_profile([d / 1000 for d in dists], alts)
 
 
 def _render_hr_chart(splits_df: pd.DataFrame, max_hr: int, hr_zones: list | None = None) -> None:

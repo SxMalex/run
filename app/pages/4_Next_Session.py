@@ -12,7 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime, timedelta
 
-from strava_client import _seconds_to_pace_str, map_zoom, safe_load_activities
+from formatting import map_zoom, seconds_to_pace_str
 from next_session_logic import (
     SESSION_TYPES,
     compute_tsb as _compute_tsb,
@@ -20,7 +20,14 @@ from next_session_logic import (
     parse_ors_route as _parse_ors_route,
     build_gpx as _build_gpx,
 )
-from ui_helpers import get_strava_client, render_strava_attribution, require_token
+from ui_helpers import (
+    cached_load_activities,
+    get_strava_client,
+    render_elevation_profile,
+    render_refresh_button,
+    render_strava_attribution,
+    require_token,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -64,12 +71,6 @@ def _ors_options(session_key: str, prefer_trails: bool, distance_m: int, seed: i
         "profile_params": {"weightings": weightings},
     }
 
-# ---------------------------------------------------------------------------
-# Données
-# ---------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
-def load_activities(athlete_id: int, limit: int = 200) -> tuple[pd.DataFrame, str | None]:
-    return safe_load_activities(get_strava_client(), limit)
 
 
 def _get_recent_starts(running_df: pd.DataFrame, n: int = 10) -> pd.DataFrame:
@@ -133,38 +134,17 @@ def _render_route_map(route: dict, session_color: str) -> None:
 
 
 def _render_elevation_profile(route: dict, session_color: str) -> None:
+    """Calcule les distances cumulées depuis le tracé ORS et délègue au helper."""
     eles = route["elevations"]
     if not eles:
         return
-
     lats, lons = route["lats"], route["lons"]
-    # Distances cumulées (approximation)
     dists = [0.0]
     for i in range(1, len(lats)):
         dlat = (lats[i] - lats[i - 1]) * 111_000
         dlon = (lons[i] - lons[i - 1]) * 111_000 * np.cos(np.radians(lats[i]))
         dists.append(dists[-1] + np.sqrt(dlat ** 2 + dlon ** 2) / 1000)
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=dists, y=eles,
-        mode="lines",
-        fill="tozeroy",
-        fillcolor=f"rgba({int(session_color[1:3],16)},{int(session_color[3:5],16)},{int(session_color[5:7],16)},0.18)",
-        line=dict(color=session_color, width=2.5),
-        hovertemplate="<b>%{x:.2f} km</b><br>Altitude : %{y:.0f} m<extra></extra>",
-    ))
-    fig.update_layout(
-        height=200,
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#ccc"),
-        xaxis=dict(title="Distance (km)", gridcolor="rgba(255,255,255,0.05)"),
-        yaxis=dict(title="Altitude (m)", gridcolor="rgba(255,255,255,0.05)"),
-        margin=dict(l=0, r=0, t=10, b=0),
-        showlegend=False,
-    )
-    st.plotly_chart(fig)
+    render_elevation_profile(dists, eles, color=session_color, fill_alpha=0.18, height=200)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +155,7 @@ st.title("🗺️ Prochaine sortie")
 st.caption("Parcours inédit généré sur OpenStreetMap, adapté à ta forme actuelle.")
 
 # Chargement
-df, error = load_activities(_athlete_id, 200)
+df, error = cached_load_activities(_athlete_id, 200)
 if error:
     st.error(f"Erreur Strava : {error}")
     st.stop()
@@ -257,10 +237,7 @@ with st.sidebar:
         sidebar_start_lat = None
         sidebar_start_lon = None
 
-    if st.button("🔄 Actualiser les données", width='stretch'):
-        get_strava_client().invalidate_cache()
-        st.cache_data.clear()
-        st.rerun()
+    render_refresh_button()
 
 # Paramètres finaux (valeurs sidebar ou recommandation par défaut)
 target_dist_km = custom_dist
@@ -311,8 +288,8 @@ c5.metric(
 )
 
 # Fourchette d'allure
-pace_min = _seconds_to_pace_str(rec["target_pace_sec"] * 0.96)
-pace_max = _seconds_to_pace_str(rec["target_pace_sec"] * 1.04)
+pace_min = seconds_to_pace_str(rec["target_pace_sec"] * 0.96)
+pace_max = seconds_to_pace_str(rec["target_pace_sec"] * 1.04)
 st.caption(f"Fourchette d'allure conseillée : **{pace_min}** → **{pace_max}**")
 
 st.divider()

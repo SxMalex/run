@@ -7,9 +7,15 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 
-from strava_client import safe_load_activities, workout_type_label
+from formatting import workout_type_label
 from stats_tabs import tab_volume, tab_allure, tab_fc, tab_cadence, tab_regularite, tab_charge
-from ui_helpers import get_strava_client, render_strava_attribution, require_token
+from ui_helpers import (
+    cached_load_activities,
+    get_strava_client,
+    render_refresh_button,
+    render_strava_attribution,
+    require_token,
+)
 
 
 st.set_page_config(
@@ -26,9 +32,9 @@ _athlete_id = st.session_state["strava_athlete_id"]
 # ---------------------------------------------------------------------------
 # Données
 # ---------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner="Chargement des statistiques...")
 def load_data(athlete_id: int, limit: int = 200) -> tuple[pd.DataFrame, str | None]:
-    return safe_load_activities(get_strava_client(), limit)
+    """Délègue à cached_load_activities — alias kept for readability."""
+    return cached_load_activities(athlete_id, limit)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -74,10 +80,7 @@ with st.sidebar:
     }
     cutoff = datetime.now() - timedelta(days=period_days[period])
 
-    if st.button("🔄 Actualiser", width='stretch'):
-        get_strava_client().invalidate_cache()
-        st.cache_data.clear()
-        st.rerun()
+    render_refresh_button("🔄 Actualiser")
 
     zones_data = load_athlete_zones(_athlete_id)
     hr_zones_list = (zones_data.get("heart_rate") or {}).get("zones") or []

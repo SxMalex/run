@@ -100,6 +100,22 @@ def detect_home(starts: Sequence[tuple[float, float]]) -> tuple[float, float, in
     return home_lat, home_lon, len(cell_lats[best_cell])
 
 
+def bbox_around(
+    lat: float, lon: float, half_km: float
+) -> tuple[float, float, float, float]:
+    """
+    Bbox géographique de ~(2*half_km × 2*half_km) km autour de (lat, lon).
+    Compense la convergence des méridiens : 1° lon ≈ 111 km × cos(lat).
+    Le max(cos, 0.01) évite la division par ~0 aux pôles.
+
+    Retourne (sw_lat, sw_lon, ne_lat, ne_lon).
+    """
+    lat_offset = half_km / 111.0
+    cos_lat = max(math.cos(math.radians(lat)), 0.01)
+    lon_offset = half_km / (111.0 * cos_lat)
+    return (lat - lat_offset, lon - lon_offset, lat + lat_offset, lon + lon_offset)
+
+
 def track_gps_spread_m(points: Iterable[GpsPoint]) -> float:
     """Étendue GPS approximative d'un track (m). Sert à exclure les tapis."""
     lats = [p[0] for p in points]

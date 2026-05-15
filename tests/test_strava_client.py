@@ -14,18 +14,20 @@ from unittest.mock import MagicMock, patch
 
 import requests
 import strava_client as sc
+from formatting import (
+    speed_to_pace,
+    speed_to_pace_seconds,
+    seconds_to_pace_str,
+    normalize_activity_type,
+    estimate_calories,
+    extract_cadence,
+    extract_splits_metric,
+    workout_type_label,
+)
 from strava_client import (
-    _speed_to_pace,
-    _speed_to_pace_seconds,
-    _seconds_to_pace_str,
-    _normalize_activity_type,
-    _estimate_calories,
-    _extract_cadence,
-    _extract_splits_metric,
     _cache_get,
     _cache_set,
     safe_load_activities,
-    workout_type_label,
     StravaClient,
 )
 
@@ -49,79 +51,79 @@ def _make_client(athlete_id: int = _DUMMY_ATHLETE_ID, **token_overrides) -> Stra
 
 
 # ===========================================================================
-# _seconds_to_pace_str
+# seconds_to_pace_str
 # ===========================================================================
 
 class TestSecondsToPaceStr:
     def test_round_minutes(self):
-        assert _seconds_to_pace_str(300.0) == "5:00/km"
+        assert seconds_to_pace_str(300.0) == "5:00/km"
 
     def test_non_round(self):
-        assert _seconds_to_pace_str(333.0) == "5:33/km"
+        assert seconds_to_pace_str(333.0) == "5:33/km"
 
     def test_zero_padding(self):
-        assert _seconds_to_pace_str(305.0) == "5:05/km"
+        assert seconds_to_pace_str(305.0) == "5:05/km"
 
     def test_zero(self):
-        assert _seconds_to_pace_str(0.0) == "—"
+        assert seconds_to_pace_str(0.0) == "—"
 
     def test_negative(self):
-        assert _seconds_to_pace_str(-10.0) == "—"
+        assert seconds_to_pace_str(-10.0) == "—"
 
     def test_nan_float(self):
-        assert _seconds_to_pace_str(float("nan")) == "—"
+        assert seconds_to_pace_str(float("nan")) == "—"
 
     def test_nan_numpy(self):
-        assert _seconds_to_pace_str(np.float64("nan")) == "—"
+        assert seconds_to_pace_str(np.float64("nan")) == "—"
 
     def test_numpy_float64(self):
-        assert _seconds_to_pace_str(np.float64(300.0)) == "5:00/km"
+        assert seconds_to_pace_str(np.float64(300.0)) == "5:00/km"
 
     def test_fast_pace(self):
         # 2:46/km = 166 sec/km
-        assert _seconds_to_pace_str(166.0) == "2:46/km"
+        assert seconds_to_pace_str(166.0) == "2:46/km"
 
 
 # ===========================================================================
-# _speed_to_pace
+# speed_to_pace
 # ===========================================================================
 
 class TestSpeedToPace:
     def test_normal(self):
         # 3.0 m/s → 1000/3.0 = 333.33 sec/km → 5:33
-        assert _speed_to_pace(3.0) == "5:33/km"
+        assert speed_to_pace(3.0) == "5:33/km"
 
     def test_zero(self):
-        assert _speed_to_pace(0.0) == "—"
+        assert speed_to_pace(0.0) == "—"
 
     def test_negative(self):
-        assert _speed_to_pace(-1.0) == "—"
+        assert speed_to_pace(-1.0) == "—"
 
     def test_none(self):
-        assert _speed_to_pace(None) == "—"
+        assert speed_to_pace(None) == "—"
 
     def test_4ms(self):
         # 1000/4.0 = 250 sec = 4:10
-        assert _speed_to_pace(4.0) == "4:10/km"
+        assert speed_to_pace(4.0) == "4:10/km"
 
 
 # ===========================================================================
-# _speed_to_pace_seconds
+# speed_to_pace_seconds
 # ===========================================================================
 
 class TestSpeedToPaceSeconds:
     def test_normal(self):
-        assert _speed_to_pace_seconds(4.0) == pytest.approx(250.0)
+        assert speed_to_pace_seconds(4.0) == pytest.approx(250.0)
 
     def test_zero(self):
-        assert _speed_to_pace_seconds(0.0) == 0.0
+        assert speed_to_pace_seconds(0.0) == 0.0
 
     def test_none(self):
-        assert _speed_to_pace_seconds(None) == 0.0
+        assert speed_to_pace_seconds(None) == 0.0
 
 
 # ===========================================================================
-# _normalize_activity_type
+# normalize_activity_type
 # ===========================================================================
 
 class TestNormalizeActivityType:
@@ -140,72 +142,72 @@ class TestNormalizeActivityType:
         ("Yoga",          "yoga"),
     ])
     def test_known_types(self, sport, expected):
-        assert _normalize_activity_type(sport) == expected
+        assert normalize_activity_type(sport) == expected
 
     def test_unknown_lowercased(self):
-        assert _normalize_activity_type("Kitesurfing") == "kitesurfing"
+        assert normalize_activity_type("Kitesurfing") == "kitesurfing"
 
     def test_none_returns_unknown(self):
-        assert _normalize_activity_type(None) == "unknown"
+        assert normalize_activity_type(None) == "unknown"
 
     def test_already_normalized(self):
-        assert _normalize_activity_type("running") == "running"
+        assert normalize_activity_type("running") == "running"
 
 
 # ===========================================================================
-# _estimate_calories
+# estimate_calories
 # ===========================================================================
 
 class TestEstimateCalories:
     def test_api_value_used_first(self):
-        result = _estimate_calories(500, 1000)
+        result = estimate_calories(500, 1000)
         assert result == 500
 
     def test_api_zero_falls_through_to_kilojoules(self):
-        result = _estimate_calories(0, 200.0)
+        result = estimate_calories(0, 200.0)
         assert result == 200
 
     def test_api_none_falls_through_to_kilojoules(self):
-        result = _estimate_calories(None, 200.0)
+        result = estimate_calories(None, 200.0)
         assert result == 200
 
     def test_no_data_returns_none(self):
-        result = _estimate_calories(None, None)
+        result = estimate_calories(None, None)
         assert result is None
 
     def test_api_zero_no_kj_returns_none(self):
-        result = _estimate_calories(0, None)
+        result = estimate_calories(0, None)
         assert result is None
 
     def test_kilojoules_1to1_convention(self):
         # 1 kJ mécanique ≈ 1 kcal métabolique
-        result = _estimate_calories(None, 640.0)
+        result = estimate_calories(None, 640.0)
         assert result == 640
 
     def test_api_value_integer_cast(self):
-        result = _estimate_calories(499.9, None)
+        result = estimate_calories(499.9, None)
         assert result == 499
 
 
 # ===========================================================================
-# _extract_cadence
+# extract_cadence
 # ===========================================================================
 
 class TestExtractCadence:
     def test_running_doubles_rpm(self):
-        assert _extract_cadence(85.0, "Run") == pytest.approx(170.0)
+        assert extract_cadence(85.0, "Run") == pytest.approx(170.0)
 
     def test_running_normalized_type(self):
-        assert _extract_cadence(85.0, "running") == pytest.approx(170.0)
+        assert extract_cadence(85.0, "running") == pytest.approx(170.0)
 
     def test_cycling_unchanged(self):
-        assert _extract_cadence(90.0, "Ride") == pytest.approx(90.0)
+        assert extract_cadence(90.0, "Ride") == pytest.approx(90.0)
 
     def test_none_input(self):
-        assert _extract_cadence(None, "Run") is None
+        assert extract_cadence(None, "Run") is None
 
     def test_swimming_none(self):
-        assert _extract_cadence(None, "Swim") is None
+        assert extract_cadence(None, "Swim") is None
 
 
 # ===========================================================================
@@ -414,7 +416,7 @@ class TestWorkoutTypeLabel:
 
 
 # ===========================================================================
-# _normalize_activity_type — cas manquants
+# normalize_activity_type — cas manquants
 # ===========================================================================
 
 class TestNormalizeActivityTypeExtra:
@@ -429,11 +431,11 @@ class TestNormalizeActivityTypeExtra:
         ("cardio_training", "cardio"),
     ])
     def test_missing_variants(self, sport, expected):
-        assert _normalize_activity_type(sport) == expected
+        assert normalize_activity_type(sport) == expected
 
 
 # ===========================================================================
-# _extract_splits_metric
+# extract_splits_metric
 # ===========================================================================
 
 class TestExtractSplitsMetric:
@@ -452,49 +454,49 @@ class TestExtractSplitsMetric:
         return base
 
     def test_empty_list(self):
-        assert _extract_splits_metric({"splits_metric": []}) == []
+        assert extract_splits_metric({"splits_metric": []}) == []
 
     def test_missing_key(self):
-        assert _extract_splits_metric({}) == []
+        assert extract_splits_metric({}) == []
 
     def test_split_count(self):
         details = {"splits_metric": [self._split(split=i) for i in range(1, 4)]}
-        assert len(_extract_splits_metric(details)) == 3
+        assert len(extract_splits_metric(details)) == 3
 
     def test_split_number(self):
         details = {"splits_metric": [self._split(split=3)]}
-        assert _extract_splits_metric(details)[0]["split"] == 3
+        assert extract_splits_metric(details)[0]["split"] == 3
 
     def test_pace_computed_from_speed(self):
         details = {"splits_metric": [self._split(average_speed=4.0)]}
-        row = _extract_splits_metric(details)[0]
+        row = extract_splits_metric(details)[0]
         assert row["pace_sec"] == pytest.approx(250.0)
         assert row["pace"] == "4:10/km"
 
     def test_zero_speed_gives_zero_pace(self):
         details = {"splits_metric": [self._split(average_speed=0)]}
-        row = _extract_splits_metric(details)[0]
+        row = extract_splits_metric(details)[0]
         assert row["pace_sec"] == 0.0
 
     def test_none_speed_gives_zero_pace(self):
         details = {"splits_metric": [self._split(average_speed=None)]}
-        row = _extract_splits_metric(details)[0]
+        row = extract_splits_metric(details)[0]
         assert row["pace_sec"] == 0.0
 
     def test_missing_hr_is_none(self):
         details = {"splits_metric": [self._split()]}
         details["splits_metric"][0].pop("average_heartrate", None)
-        row = _extract_splits_metric(details)[0]
+        row = extract_splits_metric(details)[0]
         assert row["avg_hr"] is None
 
     def test_elevation_difference(self):
         details = {"splits_metric": [self._split(elevation_difference=-3.0)]}
-        row = _extract_splits_metric(details)[0]
+        row = extract_splits_metric(details)[0]
         assert row["elev_diff"] == pytest.approx(-3.0)
 
     def test_none_elev_defaults_zero(self):
         details = {"splits_metric": [self._split(elevation_difference=None)]}
-        row = _extract_splits_metric(details)[0]
+        row = extract_splits_metric(details)[0]
         assert row["elev_diff"] == 0
 
 
@@ -557,81 +559,6 @@ class TestSummarizeActivity:
         for key in ["distance_km", "duration_min", "avgPace", "avgHR",
                     "maxHR", "avgCadence", "calories", "elevationGain", "avgPower"]:
             assert key in result
-
-
-# ===========================================================================
-# StravaClient.get_best_efforts
-# ===========================================================================
-
-class TestGetBestEfforts:
-    def setup_method(self):
-        self.client = _make_client()
-
-    def _mock_details(self, activity_name, efforts):
-        """Construit un faux dict d'activité Strava avec best_efforts."""
-        return {
-            "name": activity_name,
-            "start_date_local": "2025-04-01T07:00:00Z",
-            "best_efforts": [
-                {"name": e["name"], "elapsed_time": e["elapsed_time"], "pr_rank": e.get("pr_rank")}
-                for e in efforts
-            ],
-        }
-
-    def _patches(self, get_side_effect=None, get_return=None):
-        """Contexte de mock commun : cache désactivé + connexion bouchonnée."""
-        side = {"side_effect": get_side_effect} if get_side_effect else {"return_value": get_return}
-        return (
-            patch.object(self.client, "_ensure_fresh_token"),
-            patch.object(self.client, "_get", **side),
-            patch("strava_client._cache_get", return_value=None),
-            patch("strava_client._cache_set"),
-        )
-
-    def test_empty_list_returns_empty_dict(self):
-        with patch.object(self.client, "_ensure_fresh_token"), \
-             patch("strava_client._cache_get", return_value=None), \
-             patch("strava_client._cache_set"):
-            result = self.client.get_best_efforts([])
-        assert result == {}
-
-    def test_single_effort_stored(self):
-        details = self._mock_details("Run A", [{"name": "1k", "elapsed_time": 240}])
-        p1, p2, p3, p4 = self._patches(get_return=details)
-        with p1, p2, p3, p4:
-            result = self.client.get_best_efforts([1])
-        assert "1k" in result
-        assert result["1k"]["elapsed_time"] == 240
-
-    def test_best_time_wins_across_activities(self):
-        fast = self._mock_details("Fast Run", [{"name": "1k", "elapsed_time": 210}])
-        slow = self._mock_details("Slow Run", [{"name": "1k", "elapsed_time": 270}])
-        p1, p2, p3, p4 = self._patches(get_side_effect=[fast, slow])
-        with p1, p2, p3, p4:
-            result = self.client.get_best_efforts([1, 2])
-        assert result["1k"]["elapsed_time"] == 210
-        assert result["1k"]["activity_name"] == "Fast Run"
-
-    def test_activity_without_efforts_ignored(self):
-        details = self._mock_details("No efforts", [])
-        p1, p2, p3, p4 = self._patches(get_return=details)
-        with p1, p2, p3, p4:
-            result = self.client.get_best_efforts([1])
-        assert result == {}
-
-    def test_effort_missing_elapsed_time_skipped(self):
-        details = self._mock_details("Run", [{"name": "1k", "elapsed_time": None}])
-        p1, p2, p3, p4 = self._patches(get_return=details)
-        with p1, p2, p3, p4:
-            result = self.client.get_best_efforts([1])
-        assert result == {}
-
-    def test_api_error_skipped_continues(self):
-        good = self._mock_details("Good", [{"name": "5k", "elapsed_time": 1200}])
-        p1, p2, p3, p4 = self._patches(get_side_effect=[Exception("timeout"), good])
-        with p1, p2, p3, p4:
-            result = self.client.get_best_efforts([1, 2])
-        assert "5k" in result
 
 
 # ===========================================================================
@@ -1192,3 +1119,181 @@ class TestExploreSegments:
              patch.object(self.client, "_get", return_value=[1, 2, 3]):
             result = self.client.explore_segments(45.0, 4.8, 45.1, 4.9)
         assert result == []
+
+
+# ===========================================================================
+# StravaClient.get_activities — pipeline central de récupération
+# ===========================================================================
+
+class TestGetActivities:
+    """Couvre le mapping JSON Strava → DataFrame, la pagination et le cache."""
+
+    def setup_method(self):
+        self.client = _make_client()
+
+    def _sample_activity(self, **overrides):
+        """Une activité Strava typique (JSON brut depuis l'API)."""
+        base = {
+            "id": 12345,
+            "name": "Morning Run",
+            "sport_type": "Run",
+            "start_date_local": "2026-04-01T07:30:00Z",
+            "distance": 10042.5,
+            "moving_time": 3300,
+            "average_speed": 3.04,
+            "average_heartrate": 148.0,
+            "max_heartrate": 172.0,
+            "average_cadence": 85.0,
+            "calories": 600,
+            "kilojoules": None,
+            "total_elevation_gain": 80.0,
+            "kudos_count": 3,
+            "start_latlng": [48.85, 2.35],
+            "workout_type": 0,
+        }
+        base.update(overrides)
+        return base
+
+    def test_cache_hit_skips_api(self):
+        """Sur cache hit, get_activities renvoie un DataFrame sans toucher à _get."""
+        cached_rows = [{
+            "activityId": 1,
+            "startTimeLocal": "2026-04-01T07:30:00",
+            "activityName": "X",
+            "activityType": "running",
+            "distance_km": 10.0,
+            "duration_min": 55.0,
+            "avgPace": "5:30/km",
+            "avgPace_sec": 330.0,
+            "avgHR": 148.0,
+            "maxHR": 172.0,
+            "avgCadence": 170.0,
+            "calories": 600,
+            "elevationGain": 80.0,
+            "avgSpeed_ms": 3.03,
+            "kudosCount": 3,
+            "startLat": 48.85,
+            "startLon": 2.35,
+            "workoutType": 0,
+        }]
+        with patch("strava_client._cache_get", return_value=cached_rows), \
+             patch.object(self.client, "_get") as mock_get:
+            df = self.client.get_activities(limit=50)
+        mock_get.assert_not_called()
+        assert len(df) == 1
+        assert df.iloc[0]["activityId"] == 1
+
+    def test_mapping_columns_and_distance_rounding(self):
+        """Les champs JSON sont mappés sur les bons noms de colonnes ; distance arrondie à 2 décimales."""
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value=[self._sample_activity()]):
+            df = self.client.get_activities(limit=50)
+        assert len(df) == 1
+        row = df.iloc[0]
+        assert row["activityId"] == 12345
+        assert row["activityName"] == "Morning Run"
+        assert row["activityType"] == "running"
+        # 10042.5 m → 10.04 km (arrondi à 2 décimales)
+        assert row["distance_km"] == pytest.approx(10.04, abs=1e-6)
+        # 3300s → 55.0 min
+        assert row["duration_min"] == pytest.approx(55.0, abs=1e-6)
+        # cadence = 85 RPM × 2 (running) = 170
+        assert row["avgCadence"] == pytest.approx(170.0)
+        assert row["startLat"] == pytest.approx(48.85)
+        assert row["startLon"] == pytest.approx(2.35)
+        assert row["workoutType"] == 0
+
+    def test_start_time_local_is_tz_naive(self):
+        """Le timestamp ISO+Z doit ressortir tz-naive (utc=True puis tz_convert(None))."""
+        activity = self._sample_activity(start_date_local="2026-04-01T07:30:00Z")
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value=[activity]):
+            df = self.client.get_activities(limit=50)
+        ts = df.iloc[0]["startTimeLocal"]
+        # tz-naive : pas d'attribut tzinfo non-None
+        assert ts.tzinfo is None
+
+    def test_start_latlng_none_does_not_crash(self):
+        """Une activité sans coordonnées GPS doit produire startLat/startLon = None."""
+        activity = self._sample_activity(start_latlng=None)
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value=[activity]):
+            df = self.client.get_activities(limit=50)
+        assert df.iloc[0]["startLat"] is None
+        assert df.iloc[0]["startLon"] is None
+
+    def test_pagination_stops_when_batch_shorter_than_per_page(self):
+        """
+        Avec limit=200, per_page=200. Si la 1ère page renvoie 200 et la 2e
+        renvoie <200, la boucle s'arrête après la 2e (donc _get appelé 2 fois).
+        """
+        full_page = [self._sample_activity(id=i) for i in range(200)]
+        partial = [self._sample_activity(id=1000 + i) for i in range(50)]
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", side_effect=[full_page, partial]) as mock_get:
+            df = self.client.get_activities(limit=200)
+        # 200 activités demandées, pagination s'arrête au 1er batch complet (200 ≥ limit)
+        # La logique : `while len(activities) < limit` → après 1er batch len=200 == limit → stop
+        # Donc _get est appelé 1 seule fois ici
+        assert mock_get.call_count == 1
+        assert len(df) == 200
+
+    def test_pagination_two_pages_when_first_smaller_than_limit(self):
+        """
+        Avec limit=200 et per_page=200, si la 1ère page renvoie 150,
+        la condition `len(batch) < per_page` casse la boucle après cette page.
+        """
+        partial = [self._sample_activity(id=i) for i in range(150)]
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", side_effect=[partial]) as mock_get:
+            df = self.client.get_activities(limit=200)
+        assert mock_get.call_count == 1
+        assert len(df) == 150
+
+    def test_empty_response_returns_empty_df(self):
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value=[]):
+            df = self.client.get_activities(limit=50)
+        assert df.empty
+
+    def test_calories_estimated_from_kilojoules_when_api_zero(self):
+        """Quand `calories` Strava = 0 et `kilojoules` > 0 → estimation 1:1."""
+        activity = self._sample_activity(calories=0, kilojoules=420.0)
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value=[activity]):
+            df = self.client.get_activities(limit=50)
+        assert df.iloc[0]["calories"] == 420
+
+    def test_calories_api_used_first(self):
+        """Quand `calories` API > 0, on l'utilise (pas le fallback kJ)."""
+        activity = self._sample_activity(calories=550, kilojoules=999.0)
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value=[activity]):
+            df = self.client.get_activities(limit=50)
+        assert df.iloc[0]["calories"] == 550
+
+    def test_limit_truncates_extra_activities(self):
+        """Si la 1ère page renvoie plus que limit, on tronque proprement."""
+        activities = [self._sample_activity(id=i) for i in range(80)]
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value=activities):
+            df = self.client.get_activities(limit=50)
+        # `activities = activities[:limit]` → 50 lignes
+        assert len(df) == 50
+
+    def test_cache_set_called_on_miss(self):
+        """Sur cache miss, get_activities doit écrire dans le cache."""
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set") as mock_set, \
+             patch.object(self.client, "_get", return_value=[self._sample_activity()]):
+            self.client.get_activities(limit=50)
+        mock_set.assert_called_once()

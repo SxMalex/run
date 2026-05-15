@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 
 from stats_tabs._shared import WORKOUT_COLORS
@@ -97,7 +98,6 @@ def render(running_filtered: pd.DataFrame, client) -> None:
             st.info("Pas assez de données.")
 
     st.markdown("#### Distribution des distances")
-    import plotly.express as px
     fig_hist = px.histogram(
         running_filtered,
         x="distance_km",

@@ -6,7 +6,7 @@ sans dépendance à Streamlit.
 import numpy as np
 import pandas as pd
 from datetime import date, datetime, timedelta, timezone
-from strava_client import _seconds_to_pace_str
+from formatting import seconds_to_pace_str
 
 _JOURS_FR = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 _MOIS_FR = ["jan.", "fév.", "mars", "avr.", "mai", "juin",
@@ -231,11 +231,11 @@ def recommend_session(running_df: pd.DataFrame) -> dict:
         "days_since": days_since,
         "target_dist_km": target_dist_km,
         "target_pace_sec": target_pace_sec,
-        "target_pace_str": _seconds_to_pace_str(target_pace_sec),
+        "target_pace_str": seconds_to_pace_str(target_pace_sec),
         "target_elev": target_elev,
         "duration_min": duration_min,
         "avg_dist": round(avg_dist, 1),
-        "avg_pace_str": _seconds_to_pace_str(avg_pace_sec),
+        "avg_pace_str": seconds_to_pace_str(avg_pace_sec),
         "suggested_date": suggested_date,
         "suggested_date_str": format_date_fr(suggested_date),
     }

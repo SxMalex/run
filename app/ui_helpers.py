@@ -1,10 +1,14 @@
 """Helpers d'affichage Streamlit partagés entre pages."""
 
+from typing import Sequence
+
+import pandas as pd
 import plotly.graph_objects as go
 import polyline as polyline_lib
 import streamlit as st
 
-from strava_client import StravaClient, map_zoom
+from formatting import map_zoom
+from strava_client import StravaClient, safe_load_activities
 
 
 def _has_session_token() -> bool:
@@ -67,6 +71,88 @@ def render_strava_attribution() -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def cache_nonce() -> int:
+    """
+    Compteur d'invalidation per-session. À passer en argument à toute fonction
+    `@st.cache_data` qui doit pouvoir être invalidée explicitement par
+    `render_refresh_button` sans flusher le cache global (qui affecterait les
+    autres utilisateurs connectés).
+    """
+    return st.session_state.get("_cache_nonce", 0)
+
+
+@st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
+def _cached_load_activities_impl(
+    athlete_id: int, limit: int, nonce: int
+) -> tuple[pd.DataFrame, str | None]:
+    """Le `nonce` est dans la signature pour servir de clé de cache per-session."""
+    del nonce  # uniquement pour la cache key
+    return safe_load_activities(get_strava_client(), limit)
+
+
+def cached_load_activities(
+    athlete_id: int, limit: int = 100
+) -> tuple[pd.DataFrame, str | None]:
+    """Wrapper unique pour `load_activities` : factorise le pattern dupliqué dans 7 pages."""
+    return _cached_load_activities_impl(athlete_id, limit, cache_nonce())
+
+
+def render_refresh_button(label: str = "🔄 Actualiser les données", *, stretch: bool = True) -> None:
+    """
+    Bouton de rafraîchissement standard. Invalide le cache disque per-athlete
+    + bump du nonce per-session pour invalider les caches Streamlit `@st.cache_data`
+    qui prennent `nonce` en argument. **N'utilise pas** `st.cache_data.clear()`
+    qui flusherait le cache RAM partagé entre tous les utilisateurs (DoS).
+    """
+    if st.button(label, width="stretch" if stretch else "content"):
+        get_strava_client().invalidate_cache()
+        st.session_state["_cache_nonce"] = cache_nonce() + 1
+        st.rerun()
+
+
+def hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Convertit un hex `#rrggbb` en chaîne CSS `rgba(r,g,b,a)`."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def render_elevation_profile(
+    distances_km: Sequence[float],
+    elevations: Sequence[float],
+    *,
+    color: str = "#fc4c02",
+    fill_alpha: float = 0.15,
+    height: int = 210,
+) -> None:
+    """
+    Profil altimétrique générique : reçoit deux séries alignées et trace
+    un Plotly Scatter avec fill. Utilisé par main.py (depuis streams Strava)
+    et 4_Next_Session.py (depuis route ORS).
+    """
+    if not elevations or not distances_km:
+        st.caption("Profil altimétrique non disponible.")
+        return
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=list(distances_km), y=list(elevations),
+        mode="lines",
+        fill="tozeroy",
+        fillcolor=hex_to_rgba(color, fill_alpha),
+        line=dict(color=color, width=2),
+        hovertemplate="<b>%{x:.2f} km</b><br>Altitude : %{y:.0f} m<extra></extra>",
+    ))
+    fig.update_layout(
+        height=height,
+        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc"),
+        xaxis=dict(title="Distance (km)", gridcolor="rgba(255,255,255,0.05)"),
+        yaxis=dict(title="Altitude (m)", gridcolor="rgba(255,255,255,0.05)"),
+        margin=dict(l=0, r=0, t=10, b=0), showlegend=False,
+    )
+    st.plotly_chart(fig)
 
 
 def render_activity_map(details_data: dict, height: int = 420) -> None:

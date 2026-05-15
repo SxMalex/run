@@ -17,8 +17,19 @@ from typing import Callable, Optional
 from urllib.parse import quote
 
 import pandas as pd
-import numpy as np
 import requests
+
+from formatting import (
+    estimate_calories,
+    extract_cadence,
+    extract_splits_metric,
+    map_zoom,
+    normalize_activity_type,
+    seconds_to_pace_str,
+    speed_to_pace,
+    speed_to_pace_seconds,
+    workout_type_label,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -218,15 +229,15 @@ class StravaClient:
             avg_speed_ms = act.get("average_speed", 0)
             sport = act.get("sport_type") or act.get("type", "unknown")
 
-            avg_pace_str = _speed_to_pace(avg_speed_ms)
-            avg_pace_sec = _speed_to_pace_seconds(avg_speed_ms)
-            cadence = _extract_cadence(act.get("average_cadence"), sport)
+            avg_pace_str = speed_to_pace(avg_speed_ms)
+            avg_pace_sec = speed_to_pace_seconds(avg_speed_ms)
+            cadence = extract_cadence(act.get("average_cadence"), sport)
 
             rows.append({
                 "activityId": act.get("id"),
                 "startTimeLocal": act.get("start_date_local"),
                 "activityName": act.get("name", ""),
-                "activityType": _normalize_activity_type(sport),
+                "activityType": normalize_activity_type(sport),
                 "distance_km": round(distance_m / 1000, 2),
                 "duration_min": round(duration_s / 60, 1),
                 "avgPace": avg_pace_str,
@@ -234,7 +245,7 @@ class StravaClient:
                 "avgHR": act.get("average_heartrate"),
                 "maxHR": act.get("max_heartrate"),
                 "avgCadence": cadence,
-                "calories": _estimate_calories(
+                "calories": estimate_calories(
                     act.get("calories"),
                     act.get("kilojoules"),
                 ),
@@ -277,7 +288,7 @@ class StravaClient:
         result = {
             "details": details,
             "splits": splits,
-            "splits_metric": _extract_splits_metric(details),
+            "splits_metric": extract_splits_metric(details),
             "summary": self._summarize_activity(details),
         }
 
@@ -294,13 +305,13 @@ class StravaClient:
                 dist = lap.get("distance", 0) or 0
                 dur = lap.get("elapsed_time", 0) or 0
                 speed = lap.get("average_speed", 0) or 0
-                cadence = _extract_cadence(lap.get("average_cadence"), sport)
+                cadence = extract_cadence(lap.get("average_cadence"), sport)
                 splits.append({
                     "lap": i,
                     "distance_km": round(dist / 1000, 2),
                     "duration_min": round(dur / 60, 2),
-                    "pace": _speed_to_pace(speed),
-                    "pace_sec": _speed_to_pace_seconds(speed),
+                    "pace": speed_to_pace(speed),
+                    "pace_sec": speed_to_pace_seconds(speed),
                     "avgHR": lap.get("average_heartrate"),
                     "avgCadence": cadence,
                     "elevationGain": lap.get("total_elevation_gain"),
@@ -316,12 +327,12 @@ class StravaClient:
         duration_s = details.get("moving_time", 0) or 0
         avg_speed = details.get("average_speed", 0) or 0
         sport = details.get("sport_type") or details.get("type", "unknown")
-        cadence = _extract_cadence(details.get("average_cadence"), sport)
+        cadence = extract_cadence(details.get("average_cadence"), sport)
 
         return {
             "distance_km": round(distance_m / 1000, 2),
             "duration_min": round(duration_s / 60, 1),
-            "avgPace": _speed_to_pace(avg_speed),
+            "avgPace": speed_to_pace(avg_speed),
             "avgHR": details.get("average_heartrate"),
             "maxHR": details.get("max_heartrate"),
             "avgCadence": cadence,
@@ -424,7 +435,7 @@ class StravaClient:
         nb_mois = month_mask.sum()
 
         pace_vals = running.loc[running["avgPace_sec"] > 0, "avgPace_sec"]
-        pace_moyen = _seconds_to_pace_str(pace_vals.mean()) if not pace_vals.empty else "—"
+        pace_moyen = seconds_to_pace_str(pace_vals.mean()) if not pace_vals.empty else "—"
 
         hr_vals = running["avgHR"].dropna()
         hr_moyen = f"{int(hr_vals.mean())} bpm" if not hr_vals.empty else "—"
@@ -479,48 +490,6 @@ class StravaClient:
         except Exception as e:
             logger.warning("Zones athlète indisponibles : %s", e)
             return {}
-
-    def get_best_efforts(self, activity_ids: list[int]) -> dict[str, dict]:
-        """
-        Récupère les best_efforts Strava (meilleurs temps sur distances standard)
-        depuis les détails des activités fournies.
-        Retourne un dict {nom_distance: {elapsed_time, date, activity_name}}.
-        Conserve le meilleur temps toutes activités confondues.
-        """
-        cache_key = f"best_efforts_{'_'.join(str(i) for i in sorted(activity_ids))}"
-        cached = _cache_get(self.athlete_id, cache_key)
-        if cached is not None:
-            return cached
-
-        best: dict[str, dict] = {}
-
-        for activity_id in activity_ids:
-            try:
-                details = self._get(f"activities/{activity_id}")
-            except Exception as e:
-                logger.warning("Impossible de récupérer l'activité %s : %s", activity_id, e)
-                continue
-
-            activity_name = details.get("name", "")
-            date_str = details.get("start_date_local", "")
-
-            for effort in details.get("best_efforts", []):
-                name = effort.get("name", "")
-                elapsed = effort.get("elapsed_time")
-                pr_rank = effort.get("pr_rank")
-                if not elapsed or not name:
-                    continue
-                # On garde le meilleur effort toutes activités confondues
-                if name not in best or elapsed < best[name]["elapsed_time"]:
-                    best[name] = {
-                        "elapsed_time": elapsed,
-                        "date": date_str,
-                        "activity_name": activity_name,
-                        "pr_rank": pr_rank,
-                    }
-
-        _cache_set(self.athlete_id, cache_key, best)
-        return best
 
     def get_splits_aggregate(self, activity_ids: list[int]) -> pd.DataFrame:
         """
@@ -664,9 +633,13 @@ class StravaClient:
             )
             result = {k: v.get("data", []) for k, v in raw.items() if isinstance(v, dict)}
             _cache_set(self.athlete_id, cache_key, result)
+            # Délai post-API pour respecter le rate limit Strava (100 req/15 min).
+            # N'est appliqué que sur cache miss — les hits restent instantanés.
+            time.sleep(0.5)
             return result
         except Exception as e:
             logger.warning("Streams indisponibles pour l'activité %s : %s", activity_id, e)
+            time.sleep(1.0)
             return {}
 
     def invalidate_cache(self) -> None:
@@ -714,67 +687,8 @@ def safe_load_activities(
 
 
 # ---------------------------------------------------------------------------
-# Fonctions utilitaires
+# Helpers internes (spécifiques aux stats DataFrame de StravaClient)
 # ---------------------------------------------------------------------------
-
-def _estimate_calories(
-    calories_api: float | None,
-    kilojoules: float | None,
-) -> int | None:
-    """
-    Retourne les calories depuis Strava.
-    Fallback : kilojoules (capteur de puissance vélo) → kcal via conversion physique.
-    """
-    if calories_api and calories_api > 0:
-        return int(calories_api)
-    # Convention : 1 kJ mécanique ≈ 1 kcal métabolique (rendement ~25% × 4.184 s'annulent)
-    if kilojoules and kilojoules > 0:
-        return int(kilojoules)
-    return None
-
-
-def _speed_to_pace(speed_ms: float) -> str:
-    """Convertit une vitesse en m/s en pace min:sec/km."""
-    if not speed_ms or speed_ms <= 0:
-        return "—"
-    return _seconds_to_pace_str(1000 / speed_ms)
-
-
-def _speed_to_pace_seconds(speed_ms: float) -> float:
-    """Convertit une vitesse en m/s en pace en secondes/km."""
-    if not speed_ms or speed_ms <= 0:
-        return 0.0
-    return 1000 / speed_ms
-
-
-def _seconds_to_pace_str(pace_sec: float) -> str:
-    """Convertit un pace en secondes/km en chaîne min:sec/km."""
-    if not pace_sec or pace_sec <= 0 or np.isnan(pace_sec):
-        return "—"
-    minutes = int(pace_sec // 60)
-    seconds = int(pace_sec % 60)
-    return f"{minutes}:{seconds:02d}/km"
-
-
-def map_zoom(lats: list[float], lons: list[float]) -> tuple[float, float, int]:
-    """Retourne (center_lat, center_lon, zoom) depuis une liste de coordonnées."""
-    center_lat = (min(lats) + max(lats)) / 2
-    center_lon = (min(lons) + max(lons)) / 2
-    max_range = max(max(lats) - min(lats), max(lons) - min(lons))
-    if max_range < 0.01:
-        zoom = 15
-    elif max_range < 0.05:
-        zoom = 13
-    elif max_range < 0.15:
-        zoom = 12
-    elif max_range < 0.4:
-        zoom = 11
-    elif max_range < 1.0:
-        zoom = 10
-    else:
-        zoom = 9
-    return center_lat, center_lon, zoom
-
 
 def _agg_mean_pace(x):
     """Moyenne de pace en ignorant les valeurs nulles (utilisée dans groupby.agg)."""
@@ -791,87 +705,7 @@ def _filter_running(df: pd.DataFrame) -> pd.DataFrame | None:
 
 def _finalize_stats(agg: pd.DataFrame) -> pd.DataFrame:
     """Applique les transformations communes aux DataFrames d'agrégation."""
-    agg["pace_moyen"] = agg["pace_moyen_sec"].apply(_seconds_to_pace_str)
+    agg["pace_moyen"] = agg["pace_moyen_sec"].apply(seconds_to_pace_str)
     agg["km_total"] = agg["km_total"].round(1)
     agg["hr_moyen"] = agg["hr_moyen"].round(0)
     return agg
-
-
-def _extract_cadence(cadence_rpm: Optional[float], sport_type: str) -> Optional[float]:
-    """
-    Convertit la cadence Strava (RPM) en spm pour la course.
-    Strava stocke la cadence en révolutions/minute — pour la course,
-    1 révolution = 2 pas, donc spm = cadence_rpm * 2.
-    """
-    if cadence_rpm is None:
-        return None
-    if _normalize_activity_type(sport_type) == "running":
-        return round(cadence_rpm * 2, 1)
-    return cadence_rpm
-
-
-_WORKOUT_TYPE_LABELS = {
-    0: "Normal", 1: "Race", 2: "Sortie longue", 3: "Entraînement",
-    10: "Normal", 11: "Race", 12: "Sortie",
-}
-
-
-def workout_type_label(wt) -> str:
-    """Traduit le workout_type Strava (entier) en libellé lisible."""
-    return _WORKOUT_TYPE_LABELS.get(int(wt or 0), "Normal")
-
-
-def _extract_splits_metric(details: dict) -> list[dict]:
-    """Extrait les splits par kilomètre depuis les détails d'une activité."""
-    rows = []
-    for i, s in enumerate(details.get("splits_metric", [])):
-        speed = s.get("average_speed", 0) or 0
-        rows.append({
-            "split": s.get("split", i + 1),
-            "distance_m": round(s.get("distance", 0) or 0, 1),
-            "elapsed_s": s.get("elapsed_time", 0) or 0,
-            "moving_s": s.get("moving_time", 0) or 0,
-            "pace_sec": _speed_to_pace_seconds(speed),
-            "pace": _speed_to_pace(speed),
-            "avg_hr": s.get("average_heartrate"),
-            "elev_diff": s.get("elevation_difference", 0) or 0,
-            "pace_zone": s.get("pace_zone"),
-        })
-    return rows
-
-
-def _normalize_activity_type(sport_type: str) -> str:
-    """Normalise les types d'activité Strava en catégories lisibles."""
-    mapping = {
-        # Course
-        "Run": "running",
-        "TrailRun": "running",
-        "VirtualRun": "running",
-        "Treadmill": "running",
-        "running": "running",
-        "trail_running": "running",
-        # Vélo
-        "Ride": "cycling",
-        "VirtualRide": "cycling",
-        "MountainBikeRide": "cycling",
-        "GravelRide": "cycling",
-        "EBikeRide": "cycling",
-        "cycling": "cycling",
-        # Natation
-        "Swim": "swimming",
-        "swimming": "swimming",
-        # Marche / Randonnée
-        "Walk": "walking",
-        "walking": "walking",
-        "Hike": "hiking",
-        "hiking": "hiking",
-        # Musculation / Autre
-        "WeightTraining": "strength",
-        "strength_training": "strength",
-        "Yoga": "yoga",
-        "yoga": "yoga",
-        "Workout": "cardio",
-        "Crossfit": "cardio",
-        "cardio_training": "cardio",
-    }
-    return mapping.get(sport_type, sport_type.lower() if sport_type else "unknown")

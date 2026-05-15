@@ -24,8 +24,13 @@ from heatmap_logic import (
     render_white_png,
     track_gps_spread_m,
 )
-from strava_client import safe_load_activities
-from ui_helpers import get_strava_client, render_strava_attribution, require_token
+from ui_helpers import (
+    cached_load_activities,
+    get_strava_client,
+    render_refresh_button,
+    render_strava_attribution,
+    require_token,
+)
 
 
 st.set_page_config(
@@ -46,9 +51,9 @@ MAX_ACTIVITIES_LIMIT = 300
 # ---------------------------------------------------------------------------
 # Données
 # ---------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
 def load_data(athlete_id: int, limit: int) -> tuple[pd.DataFrame, Optional[str]]:
-    return safe_load_activities(get_strava_client(), limit)
+    """Délègue à cached_load_activities."""
+    return cached_load_activities(athlete_id, limit)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -168,10 +173,7 @@ with st.sidebar:
     gps_spread_min_m = st.slider("Exclure tapis (spread min m)", 0, 500, 200, 50)
     max_activities = st.slider("Activités max", 10, MAX_ACTIVITIES_LIMIT, 100, 10)
 
-    if st.button("🔄 Actualiser", width="stretch"):
-        get_strava_client().invalidate_cache()
-        st.cache_data.clear()
-        st.rerun()
+    render_refresh_button("🔄 Actualiser")
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 
-from strava_client import _seconds_to_pace_str
+from formatting import seconds_to_pace_str
 from stats_tabs._shared import WORKOUT_COLORS, add_trend_line
 from ui_helpers import get_strava_client
 
@@ -72,9 +72,9 @@ def render(running_filtered: pd.DataFrame) -> None:
     st.caption("⬇️ L'axe Y est inversé : une allure plus basse indique une vitesse plus élevée.")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Meilleure allure", _seconds_to_pace_str(pace_data["avgPace_sec"].min()))
-    c2.metric("Allure moyenne", _seconds_to_pace_str(pace_data["avgPace_sec"].mean()))
-    c3.metric("Allure médiane", _seconds_to_pace_str(float(pace_data["avgPace_sec"].median())))
+    c1.metric("Meilleure allure", seconds_to_pace_str(pace_data["avgPace_sec"].min()))
+    c2.metric("Allure moyenne", seconds_to_pace_str(pace_data["avgPace_sec"].mean()))
+    c3.metric("Allure médiane", seconds_to_pace_str(float(pace_data["avgPace_sec"].median())))
     c4.metric(
         "Tendance",
         ("Amélioration 📈" if pace_slope < 0 else "Ralentissement 📉")
@@ -92,7 +92,7 @@ def render(running_filtered: pd.DataFrame) -> None:
         .mean()
         .reset_index()
     )
-    pace_by_dist["allure"] = pace_by_dist["avgPace_sec"].apply(_seconds_to_pace_str)
+    pace_by_dist["allure"] = pace_by_dist["avgPace_sec"].apply(seconds_to_pace_str)
     pace_by_dist["pace_min"] = pace_by_dist["avgPace_sec"] / 60
 
     fig_pace_dist = go.Figure(go.Bar(

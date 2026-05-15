@@ -10,16 +10,20 @@ Pour la section "À découvrir", on utilise /segments/explore autour du point
 de départ le plus fréquent (détecté avec heatmap_logic.detect_home).
 """
 
-import math
 from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
 from dateutil.relativedelta import relativedelta
 
-from heatmap_logic import detect_home
-from strava_client import _seconds_to_pace_str, safe_load_activities
-from ui_helpers import get_strava_client, render_strava_attribution, require_token
+from heatmap_logic import bbox_around, detect_home
+from formatting import seconds_to_pace_str
+from ui_helpers import (
+    cached_load_activities,
+    get_strava_client,
+    render_strava_attribution,
+    require_token,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -37,10 +41,6 @@ _athlete_id = st.session_state["strava_athlete_id"]
 # ---------------------------------------------------------------------------
 # Chargement
 # ---------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
-def load_activities(athlete_id: int, limit: int = 100) -> tuple[pd.DataFrame, str | None]:
-    return safe_load_activities(get_strava_client(), limit)
-
 
 @st.cache_data(ttl=3600, show_spinner="Analyse des segments...")
 def load_segment_efforts(athlete_id: int, activity_ids: tuple[int, ...]) -> pd.DataFrame:
@@ -82,7 +82,7 @@ def _format_elapsed(seconds: float | None) -> str:
 def _segment_pace(distance_m: float | None, elapsed_s: float | None) -> str:
     if not distance_m or not elapsed_s or distance_m <= 0 or elapsed_s <= 0:
         return "—"
-    return _seconds_to_pace_str(elapsed_s / (distance_m / 1000))
+    return seconds_to_pace_str(elapsed_s / (distance_m / 1000))
 
 
 def _rank_badge(rank: float | None) -> str:
@@ -137,7 +137,7 @@ st.caption(
     "(les classements en temps réel ne sont plus exposés par l'API publique)."
 )
 
-df, error = load_activities(_athlete_id, 100)
+df, error = cached_load_activities(_athlete_id, 100)
 if error:
     st.error(f"Erreur Strava : {error}")
     st.stop()
@@ -162,7 +162,7 @@ with st.sidebar:
         min_value=min(10, n_max),
         max_value=n_max,
         value=min(50, n_max),
-        step=5,
+        step=1,
         help=(
             "Plus tu en analyses, plus tu auras de segments — mais le premier "
             "chargement est plus long si les détails ne sont pas encore en cache."
@@ -493,16 +493,7 @@ else:
             st.info("Aucune activité avec coordonnées GPS — impossible de définir une zone à explorer.")
         else:
             home_lat, home_lon, _ = _detect_home_cached(_athlete_id, tuple(starts))
-            # Bbox de ~10 × 10 km autour du point de départ le plus fréquent.
-            # Compense la convergence des méridiens : 1° lon ≈ 111 km × cos(lat).
-            # Le max(..., 0.01) prévient une division par ~0 aux pôles (impossible
-            # en pratique mais defensive coding gratuit).
-            half_km = 5.0
-            lat_offset = half_km / 111.0
-            cos_lat = max(math.cos(math.radians(home_lat)), 0.01)
-            lon_offset = half_km / (111.0 * cos_lat)
-            sw_lat, ne_lat = home_lat - lat_offset, home_lat + lat_offset
-            sw_lon, ne_lon = home_lon - lon_offset, home_lon + lon_offset
+            sw_lat, sw_lon, ne_lat, ne_lon = bbox_around(home_lat, home_lon, half_km=5.0)
 
             st.caption(
                 f"📍 Zone explorée : centrée sur ({home_lat:.4f}, {home_lon:.4f}) — "

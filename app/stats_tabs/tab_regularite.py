@@ -9,7 +9,9 @@ def render(running_df: pd.DataFrame) -> None:
     st.subheader("Calendrier de régularité")
 
     available_years = sorted(running_df["startTimeLocal"].dt.year.unique(), reverse=True)
-    selected_year = st.selectbox("Année", available_years, index=0, key="heatmap_year")
+    # On n'utilise pas `index=0` car il serait ignoré si `heatmap_year` existe
+    # déjà en session_state — le selectbox initialise depuis la session.
+    selected_year = st.selectbox("Année", available_years, key="heatmap_year")
 
     year_df = running_df[running_df["startTimeLocal"].dt.year == selected_year].copy()
     year_df["date"] = pd.to_datetime(year_df["startTimeLocal"].dt.date)

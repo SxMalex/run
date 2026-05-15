@@ -69,6 +69,55 @@ def empty_df():
 
 
 @pytest.fixture
+def make_running_df():
+    """
+    Factory partagée pour construire un DataFrame de sorties course.
+    Utilisée par les tests de `next_session_logic` (compute_tsb, recommend_session,
+    suggest_next_date) pour éviter la duplication des helpers `_make_df` locaux.
+
+    Paramètres :
+    - n : nombre de sorties (défaut 10)
+    - days_apart : espacement entre sorties en jours (défaut 3)
+    - pace_sec : allure en sec/km (défaut 330)
+    - distance_km : distance par sortie (défaut 10.0)
+    - duration_min : durée par sortie (défaut 55.0)
+    - with_location : si True, inclut activityId / activityName / startLat / startLon
+    """
+    def _factory(
+        n: int = 10,
+        days_apart: int = 3,
+        pace_sec: float = 330.0,
+        distance_km: float = 10.0,
+        duration_min: float = 55.0,
+        with_location: bool = True,
+    ) -> pd.DataFrame:
+        now = datetime.now()
+        rows = []
+        for i in range(n):
+            row = {
+                "startTimeLocal": now - timedelta(days=i * days_apart),
+                "activityType": "running",
+                "distance_km": distance_km,
+                "duration_min": duration_min,
+                "avgPace_sec": pace_sec,
+                "avgHR": 148.0,
+                "elevationGain": 60.0,
+            }
+            if with_location:
+                row.update({
+                    "activityName": f"Run {i}",
+                    "startLat": 48.85,
+                    "startLon": 2.35,
+                    "activityId": i + 1,
+                })
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        df["startTimeLocal"] = pd.to_datetime(df["startTimeLocal"])
+        return df
+    return _factory
+
+
+@pytest.fixture
 def recent_running_df():
     """Sorties concentrées dans la semaine courante."""
     now = datetime.now().replace(microsecond=0)

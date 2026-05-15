@@ -8,8 +8,14 @@ import html
 import streamlit as st
 import pandas as pd
 
-from strava_client import _seconds_to_pace_str, safe_load_activities
-from ui_helpers import get_strava_client, render_strava_attribution, require_token
+from formatting import seconds_to_pace_str
+from ui_helpers import (
+    cached_load_activities,
+    get_strava_client,
+    render_refresh_button,
+    render_strava_attribution,
+    require_token,
+)
 
 st.set_page_config(
     page_title="IA Coach — Running Dashboard",
@@ -110,7 +116,7 @@ def _format_activities_summary(df: pd.DataFrame, n: int = 10) -> str:
     lines.append(
         f"\n=== Statistiques sur ces {len(running)} sorties ===\n"
         f"- Volume total : {total_km:.1f} km\n"
-        f"- Allure moyenne : {_seconds_to_pace_str(avg_pace_sec)}\n"
+        f"- Allure moyenne : {seconds_to_pace_str(avg_pace_sec)}\n"
         f"- FC moyenne : {int(avg_hr) if avg_hr and not pd.isna(avg_hr) else 'N/A'} bpm"
     )
     return "\n".join(lines)
@@ -126,12 +132,6 @@ def _build_prompt(context: str, question: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# Cache
-# ---------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
-def load_activities(athlete_id: int, limit: int = 50) -> tuple[pd.DataFrame, str | None]:
-    return safe_load_activities(get_strava_client(), limit)
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +143,7 @@ st.caption(
     "ou n'importe quel autre LLM. Vos données Strava sont incluses dans le contexte."
 )
 
-df, error = load_activities(_athlete_id, 50)
+df, error = cached_load_activities(_athlete_id, 50)
 
 # Sidebar
 with st.sidebar:
@@ -154,10 +154,7 @@ with st.sidebar:
         help="Nombre de sorties récentes incluses dans le prompt",
     )
     st.divider()
-    if st.button("🔄 Actualiser données", width='stretch'):
-        get_strava_client().invalidate_cache()
-        st.cache_data.clear()
-        st.rerun()
+    render_refresh_button("🔄 Actualiser données")
 
 if error:
     st.error(f"**Erreur Strava :** {error}")
@@ -174,7 +171,7 @@ if not running_only.empty:
     c1.metric("Sorties analysées", min(nb_activites, len(running_only)))
     c2.metric("Volume (10 dernières)", f"{recent['distance_km'].sum():.1f} km")
     pace_vals = recent[recent["avgPace_sec"] > 0]["avgPace_sec"]
-    c3.metric("Allure moyenne", _seconds_to_pace_str(pace_vals.mean()) if not pace_vals.empty else "—")
+    c3.metric("Allure moyenne", seconds_to_pace_str(pace_vals.mean()) if not pace_vals.empty else "—")
     hr_vals = recent["avgHR"].dropna()
     c4.metric("FC moyenne", f"{hr_vals.mean():.0f} bpm" if not hr_vals.empty else "—")
 

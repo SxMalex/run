@@ -2,15 +2,23 @@
 Page Activités — Liste filtrée et détails des sorties.
 """
 
+import math
+from datetime import datetime, timedelta, date
+
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta, date
 
-from strava_client import safe_load_activities
-from ui_helpers import get_strava_client, render_activity_map, render_strava_attribution, require_token
+from formatting import decimate, seconds_to_pace_str
+from ui_helpers import (
+    cached_load_activities,
+    get_strava_client,
+    render_activity_map,
+    render_strava_attribution,
+    require_token,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -45,11 +53,6 @@ st.markdown("""
 # ---------------------------------------------------------------------------
 # Client Strava (réutilisé depuis le cache Streamlit)
 # ---------------------------------------------------------------------------
-@st.cache_data(ttl=3600, show_spinner="Chargement des activités...")
-def load_activities(athlete_id: int, limit: int = 100) -> tuple[pd.DataFrame, str | None]:
-    return safe_load_activities(get_strava_client(), limit)
-
-
 @st.cache_data(ttl=3600, show_spinner="Chargement des détails...")
 def load_activity_details(athlete_id: int, activity_id: int) -> dict:
     return get_strava_client().get_activity_details(activity_id)
@@ -66,12 +69,17 @@ def _render_streams(streams: dict, max_hr: int = 190) -> None:
     if not dist_raw:
         return
 
+    n_raw = len(dist_raw)
+    has_alt = len(streams.get("altitude", [])) == n_raw
+    has_vel = len(streams.get("velocity_smooth", [])) == n_raw
+    has_hr  = len(streams.get("heartrate", [])) == n_raw
+
+    # Décimation à ~1000 points pour éviter de surcharger Plotly côté navigateur
+    # (les streams Strava peuvent atteindre 5k-15k points sur une longue sortie).
+    streams = {k: decimate(v) for k, v in streams.items() if isinstance(v, list)}
+    dist_raw = streams["distance"]
     dist_km = [d / 1000 for d in dist_raw]
     n = len(dist_km)
-
-    has_alt = len(streams.get("altitude", [])) == n
-    has_vel = len(streams.get("velocity_smooth", [])) == n
-    has_hr  = len(streams.get("heartrate", [])) == n
 
     if not has_alt and not has_vel and not has_hr:
         st.info("Aucun stream exploitable pour cette activité (pas de capteur enregistré).")
@@ -230,7 +238,7 @@ def _render_streams(streams: dict, max_hr: int = 190) -> None:
 # ---------------------------------------------------------------------------
 st.title("📋 Mes Activités")
 
-df, error = load_activities(_athlete_id, 100)
+df, error = cached_load_activities(_athlete_id, 100)
 
 if error:
     st.error(f"Erreur Strava : {error}")
@@ -291,7 +299,6 @@ with st.sidebar:
 
     # Filtre par distance
     if not df.empty and "distance_km" in df.columns:
-        import math
         raw_max = float(df["distance_km"].max()) if not df.empty else 50.0
         max_dist = max(math.ceil(raw_max * 2) / 2, 1.0)  # round up to nearest 0.5
         dist_range = st.slider(
@@ -341,10 +348,9 @@ if not filtered.empty:
     col2.metric("Volume total", f"{filtered['distance_km'].sum():.1f} km")
     col3.metric("Durée totale", f"{filtered['duration_min'].sum() / 60:.1f} h")
     pace_vals = filtered.loc[filtered["avgPace_sec"] > 0, "avgPace_sec"]
-    from strava_client import _seconds_to_pace_str
     col4.metric(
         "Allure moyenne",
-        _seconds_to_pace_str(pace_vals.mean()) if not pace_vals.empty else "—"
+        seconds_to_pace_str(pace_vals.mean()) if not pace_vals.empty else "—"
     )
 
 st.divider()
