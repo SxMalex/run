@@ -1013,3 +1013,182 @@ class TestEnsureFreshToken:
         client = StravaClient(token={}, athlete_id=42)
         with pytest.raises(ValueError, match="manquant"):
             client._ensure_fresh_token()
+
+
+# ===========================================================================
+# get_segment_efforts
+# ===========================================================================
+
+class TestGetSegmentEfforts:
+    def setup_method(self):
+        self.client = _make_client()
+
+    def _make_cached(self, name: str, segment_efforts: list) -> dict:
+        """Construit le dict tel que stocké par get_activity_details."""
+        return {
+            "details": {"name": name, "segment_efforts": segment_efforts},
+            "splits": [],
+            "splits_metric": [],
+            "summary": {},
+        }
+
+    def _make_effort(self, seg_id=10, seg_name="Mur", kom_rank=None, pr_rank=None,
+                    elapsed=120, dist=500, grade=4.2, city="Lyon", country="France"):
+        return {
+            "start_date_local": "2026-04-01T07:00:00Z",
+            "elapsed_time": elapsed,
+            "moving_time": elapsed,
+            "kom_rank": kom_rank,
+            "pr_rank": pr_rank,
+            "segment": {
+                "id": seg_id,
+                "name": seg_name,
+                "activity_type": "Run",
+                "distance": dist,
+                "average_grade": grade,
+                "city": city,
+                "country": country,
+            },
+        }
+
+    def test_empty_list_returns_empty_df(self):
+        with patch("strava_client._cache_get", return_value=None), \
+             patch.object(self.client, "get_activity_details") as mock_get:
+            result = self.client.get_segment_efforts([])
+        assert result.empty
+        mock_get.assert_not_called()
+
+    def test_cache_hit_skips_api(self):
+        cached = self._make_cached("Run", [self._make_effort()])
+        with patch("strava_client._cache_get", return_value=cached), \
+             patch.object(self.client, "get_activity_details") as mock_get:
+            result = self.client.get_segment_efforts([42])
+        mock_get.assert_not_called()
+        assert len(result) == 1
+        assert result.iloc[0]["segment_id"] == 10
+
+    def test_cache_miss_calls_get_details(self):
+        cached = self._make_cached("Run", [self._make_effort()])
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client.time.sleep"), \
+             patch.object(self.client, "get_activity_details", return_value=cached) as mock_get:
+            result = self.client.get_segment_efforts([42])
+        mock_get.assert_called_once_with(42)
+        assert len(result) == 1
+
+    def test_columns_correct(self):
+        cached = self._make_cached(
+            "Tempo",
+            [self._make_effort(seg_id=5, seg_name="Pont", kom_rank=3, pr_rank=1)],
+        )
+        with patch("strava_client._cache_get", return_value=cached):
+            result = self.client.get_segment_efforts([1])
+        expected_cols = {
+            "activity_id", "activity_name", "effort_date", "segment_id",
+            "segment_name", "segment_activity_type", "segment_distance_m",
+            "segment_avg_grade", "segment_city", "segment_country",
+            "elapsed_time", "moving_time", "kom_rank", "pr_rank",
+        }
+        assert expected_cols.issubset(set(result.columns))
+        row = result.iloc[0]
+        assert row["activity_id"] == 1
+        assert row["activity_name"] == "Tempo"
+        assert row["segment_name"] == "Pont"
+        assert row["kom_rank"] == 3
+        assert row["pr_rank"] == 1
+
+    def test_multiple_efforts_become_multiple_rows(self):
+        cached = self._make_cached(
+            "Long",
+            [
+                self._make_effort(seg_id=1, seg_name="A"),
+                self._make_effort(seg_id=2, seg_name="B"),
+                self._make_effort(seg_id=3, seg_name="C"),
+            ],
+        )
+        with patch("strava_client._cache_get", return_value=cached):
+            result = self.client.get_segment_efforts([100])
+        assert len(result) == 3
+        assert sorted(result["segment_id"].tolist()) == [1, 2, 3]
+
+    def test_effort_without_segment_id_skipped(self):
+        bad = self._make_effort()
+        bad["segment"]["id"] = None
+        good = self._make_effort(seg_id=7)
+        cached = self._make_cached("Run", [bad, good])
+        with patch("strava_client._cache_get", return_value=cached):
+            result = self.client.get_segment_efforts([1])
+        assert len(result) == 1
+        assert result.iloc[0]["segment_id"] == 7
+
+    def test_activity_without_segments_returns_empty(self):
+        cached = self._make_cached("No segments", [])
+        with patch("strava_client._cache_get", return_value=cached):
+            result = self.client.get_segment_efforts([1])
+        assert result.empty
+
+    def test_api_error_skips_activity(self):
+        good = self._make_cached("Good", [self._make_effort(seg_id=9)])
+
+        def cache_get_side_effect(athlete_id, key):
+            return good if key == "activity_detail_2" else None
+
+        with patch("strava_client._cache_get", side_effect=cache_get_side_effect), \
+             patch("strava_client.time.sleep"), \
+             patch.object(self.client, "get_activity_details", side_effect=Exception("boom")):
+            result = self.client.get_segment_efforts([1, 2])
+        assert len(result) == 1
+        assert result.iloc[0]["segment_id"] == 9
+
+
+# ===========================================================================
+# explore_segments
+# ===========================================================================
+
+class TestExploreSegments:
+    def setup_method(self):
+        self.client = _make_client()
+
+    def test_cache_hit_skips_api(self):
+        cached = [{"id": 1, "name": "Cached"}]
+        with patch("strava_client._cache_get", return_value=cached), \
+             patch.object(self.client, "_get") as mock_get:
+            result = self.client.explore_segments(45.0, 4.8, 45.1, 4.9)
+        mock_get.assert_not_called()
+        assert result == cached
+
+    def test_cache_miss_calls_api_and_caches(self):
+        segments = [{"id": 1, "name": "S1"}, {"id": 2, "name": "S2"}]
+        api_response = {"segments": segments}
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set") as mock_set, \
+             patch.object(self.client, "_get", return_value=api_response):
+            result = self.client.explore_segments(45.0, 4.8, 45.1, 4.9)
+        assert result == segments
+        mock_set.assert_called_once()
+
+    def test_api_error_returns_empty_list(self):
+        with patch("strava_client._cache_get", return_value=None), \
+             patch.object(self.client, "_get", side_effect=Exception("boom")):
+            result = self.client.explore_segments(45.0, 4.8, 45.1, 4.9)
+        assert result == []
+
+    def test_passes_bounds_and_activity_type(self):
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value={"segments": []}) as mock_get:
+            self.client.explore_segments(45.0, 4.8, 45.1, 4.9, activity_type="riding")
+        args, kwargs = mock_get.call_args
+        assert args[0] == "segments/explore"
+        params = args[1] if len(args) > 1 else kwargs.get("params") or kwargs
+        # _get(endpoint, params) → params est le 2e positionnel
+        assert params["activity_type"] == "riding"
+        assert params["bounds"] == "45.0,4.8,45.1,4.9"
+
+    def test_unexpected_response_shape_returns_empty(self):
+        # API renvoie une liste au lieu d'un dict → on doit retourner []
+        with patch("strava_client._cache_get", return_value=None), \
+             patch("strava_client._cache_set"), \
+             patch.object(self.client, "_get", return_value=[1, 2, 3]):
+            result = self.client.explore_segments(45.0, 4.8, 45.1, 4.9)
+        assert result == []

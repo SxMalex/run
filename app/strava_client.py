@@ -556,6 +556,93 @@ class StravaClient:
                 })
         return pd.DataFrame(rows) if rows else pd.DataFrame()
 
+    def get_segment_efforts(self, activity_ids: list[int]) -> pd.DataFrame:
+        """
+        Récupère tous les segment_efforts présents dans les détails des activités.
+
+        S'appuie sur `get_activity_details` (qui cache) : si l'utilisateur a déjà
+        consulté ses activités, aucun appel API supplémentaire n'est fait.
+        Un délai de 0.5 s est appliqué entre chaque appel API réel pour respecter
+        le rate limit Strava (100 req/15 min).
+
+        Retourne un DataFrame avec une ligne par effort : un même segment peut
+        apparaître plusieurs fois si l'athlète l'a couru plusieurs fois.
+        """
+        rows = []
+        for aid in activity_ids:
+            cache_key = f"activity_detail_{aid}"
+            cached = _cache_get(self.athlete_id, cache_key)
+            if cached is None:
+                try:
+                    cached = self.get_activity_details(aid)
+                    time.sleep(0.5)
+                except Exception as e:
+                    logger.warning("Détails indisponibles pour l'activité %s : %s", aid, e)
+                    time.sleep(1.0)
+                    continue
+            if not cached:
+                continue
+
+            details = cached.get("details", {})
+            activity_name = details.get("name", "")
+            for eff in details.get("segment_efforts", []) or []:
+                seg = eff.get("segment", {}) or {}
+                seg_id = seg.get("id")
+                if not seg_id:
+                    # Effort sans id de segment (segment supprimé / privé / non public)
+                    continue
+                rows.append({
+                    "activity_id": aid,
+                    "activity_name": activity_name,
+                    "effort_date": eff.get("start_date_local"),
+                    "segment_id": seg_id,
+                    "segment_name": seg.get("name", ""),
+                    "segment_activity_type": seg.get("activity_type", ""),
+                    "segment_distance_m": seg.get("distance"),
+                    "segment_avg_grade": seg.get("average_grade"),
+                    "segment_city": seg.get("city"),
+                    "segment_country": seg.get("country"),
+                    "elapsed_time": eff.get("elapsed_time"),
+                    "moving_time": eff.get("moving_time"),
+                    "kom_rank": eff.get("kom_rank"),
+                    "pr_rank": eff.get("pr_rank"),
+                })
+        return pd.DataFrame(rows)
+
+    def explore_segments(
+        self,
+        sw_lat: float,
+        sw_lon: float,
+        ne_lat: float,
+        ne_lon: float,
+        activity_type: str = "running",
+    ) -> list[dict]:
+        """
+        Liste les segments populaires dans une bbox géographique.
+        Strava limite à 10 segments par appel ; on les retourne tels quels.
+        """
+        cache_key = (
+            f"explore_{activity_type}_"
+            f"{sw_lat:.4f}_{sw_lon:.4f}_{ne_lat:.4f}_{ne_lon:.4f}"
+        )
+        cached = _cache_get(self.athlete_id, cache_key)
+        if cached is not None:
+            return cached
+        try:
+            data = self._get(
+                "segments/explore",
+                {
+                    "bounds": f"{sw_lat},{sw_lon},{ne_lat},{ne_lon}",
+                    "activity_type": activity_type,
+                },
+            )
+        except Exception as e:
+            logger.warning("explore_segments a échoué : %s", e)
+            return []
+        segments = data.get("segments", []) if isinstance(data, dict) else []
+        _cache_set(self.athlete_id, cache_key, segments)
+        return segments
+
     def get_streams(self, activity_id: int) -> dict[str, list]:
         """
         Récupère les streams haute-résolution d'une activité.

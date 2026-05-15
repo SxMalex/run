@@ -17,6 +17,7 @@ qu'en production derrière un reverse-proxy HTTPS.
 - **IA Coach** — génère un prompt prêt à coller dans n'importe quel LLM (Claude, ChatGPT, Gemini…) avec votre contexte d'entraînement
 - **Prochaine sortie** — recommandation de séance basée sur la forme actuelle + parcours en boucle généré sur OpenStreetMap + export GPX pour Garmin
 - **Heatmap** — cartes de chaleur des courses (fréquence, allure, FC, pente absolue, dénivelé signé) sur fond CartoDB sombre
+- **Segments** — 4 vues sur tes segments Strava : palmarès KOM/QOM (top 10), PR récents, segments « à reconquérir » (anciens podiums menacés), et à découvrir (proxy Local Legend sur 90 j + tableau de chasse via `/segments/explore`)
 
 ---
 
