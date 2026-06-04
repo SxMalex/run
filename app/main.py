@@ -140,15 +140,13 @@ if not _has_token():
                 "</p>",
                 unsafe_allow_html=True,
             )
-            # Soumission de formulaire pour rester dans l'onglet courant.
-            # Une soumission de <form> en GET navigue l'onglet par défaut
-            # (pas de target="_blank" forcé par le sanitizer Streamlit, qui
-            # ne réécrit que les <a>). On éclate les query params en hidden
-            # inputs pour que le browser construise l'URL OAuth proprement.
-            # target="_top" : sur Streamlit Cloud l'app tourne dans une iframe ;
-            # sans cible, la soumission navigue l'iframe et Strava la refuse
-            # (X-Frame-Options: deny). _top sort vers la fenêtre top du
-            # navigateur (même onglet) → contourne le blocage de framing.
+            # Sur Streamlit Cloud l'app tourne dans une iframe sandboxée SANS
+            # `allow-top-navigation` : impossible de naviguer la fenêtre top
+            # (ni `target="_top"`, ni `_self`/`_parent`, qui chargeraient
+            # Strava dans l'iframe → refusé par X-Frame-Options: deny).
+            # La seule cible qui s'échappe de la sandbox est `_blank` : Strava
+            # s'ouvre donc dans un nouvel onglet. On éclate les query params en
+            # hidden inputs pour que le browser construise l'URL OAuth proprement.
             _parsed = urlparse(_auth_url)
             _action = html.escape(
                 f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}", quote=True
@@ -161,7 +159,7 @@ if not _has_token():
             )
             st.markdown(
                 f"""
-                <form action="{_action}" method="get" target="_top" style="margin: 0;">
+                <form action="{_action}" method="get" target="_blank" style="margin: 0;">
                   {_hidden_inputs}
                   <button type="submit" class="strava-connect-btn">
                     🔗 Connecter à Strava
@@ -192,8 +190,8 @@ if not _has_token():
                 unsafe_allow_html=True,
             )
             st.caption(
-                f"Vous serez redirigé vers Strava, puis automatiquement "
-                f"renvoyé sur `{_redirect_uri}`."
+                "Strava s'ouvre dans un nouvel onglet. Après autorisation, "
+                "ce nouvel onglet affichera votre tableau de bord connecté."
             )
     st.stop()
 
