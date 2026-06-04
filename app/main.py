@@ -145,6 +145,10 @@ if not _has_token():
             # (pas de target="_blank" forcé par le sanitizer Streamlit, qui
             # ne réécrit que les <a>). On éclate les query params en hidden
             # inputs pour que le browser construise l'URL OAuth proprement.
+            # target="_top" : sur Streamlit Cloud l'app tourne dans une iframe ;
+            # sans cible, la soumission navigue l'iframe et Strava la refuse
+            # (X-Frame-Options: deny). _top sort vers la fenêtre top du
+            # navigateur (même onglet) → contourne le blocage de framing.
             _parsed = urlparse(_auth_url)
             _action = html.escape(
                 f"{_parsed.scheme}://{_parsed.netloc}{_parsed.path}", quote=True
@@ -157,7 +161,7 @@ if not _has_token():
             )
             st.markdown(
                 f"""
-                <form action="{_action}" method="get" style="margin: 0;">
+                <form action="{_action}" method="get" target="_top" style="margin: 0;">
                   {_hidden_inputs}
                   <button type="submit" class="strava-connect-btn">
                     🔗 Connecter à Strava
